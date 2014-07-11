@@ -1,5 +1,5 @@
 // Copyright 2014 Canonical Ltd.
-// Licensed under the AGPLv3, see LICENCE file for details.
+// Licensed under the LGPLv3, see LICENCE file for details.
 
 // Package txn provides a Runner, which applies operations as part
 // of a transaction onto any number of collections within a database.
@@ -19,7 +19,7 @@ import (
 	"labix.org/v2/mgo/txn"
 )
 
-var logger = loggo.GetLogger("juju.state.txn")
+var logger = loggo.GetLogger("juju.txn")
 
 const (
 	nrRetries = 3

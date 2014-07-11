@@ -1,50 +1,49 @@
 // Copyright 2014 Canonical Ltd.
-// Licensed under the AGPLv3, see LICENCE file for details.
+// Licensed under the LGPLv3, see LICENCE file for details.
 
 package txn_test
 
 import (
-	gitjujutesting "github.com/juju/testing"
+	"github.com/juju/testing"
 	"labix.org/v2/mgo"
 	"labix.org/v2/mgo/bson"
 	"labix.org/v2/mgo/txn"
 	gc "launchpad.net/gocheck"
 
-	statetxn "github.com/juju/juju/state/txn"
-	txntesting "github.com/juju/juju/state/txn/testing"
-	"github.com/juju/juju/testing"
+	jujutxn "github.com/juju/txn"
+	txntesting "github.com/juju/txn/testing"
 )
 
 var _ = gc.Suite(&txnSuite{})
 
 type txnSuite struct {
-	testing.BaseSuite
-	gitjujutesting.MgoSuite
+	testing.IsolationSuite
+	testing.MgoSuite
 	collection *mgo.Collection
-	txnRunner  statetxn.Runner
+	txnRunner  jujutxn.Runner
 }
 
 func (s *txnSuite) SetUpSuite(c *gc.C) {
-	s.BaseSuite.SetUpSuite(c)
+	s.IsolationSuite.SetUpSuite(c)
 	s.MgoSuite.SetUpSuite(c)
 }
 
 func (s *txnSuite) TearDownSuite(c *gc.C) {
 	s.MgoSuite.TearDownSuite(c)
-	s.BaseSuite.TearDownSuite(c)
+	s.IsolationSuite.TearDownSuite(c)
 }
 
 func (s *txnSuite) SetUpTest(c *gc.C) {
-	s.BaseSuite.SetUpTest(c)
+	s.IsolationSuite.SetUpTest(c)
 	s.MgoSuite.SetUpTest(c)
 	db := s.Session.DB("juju")
 	s.collection = db.C("test")
-	s.txnRunner = statetxn.NewRunner(txn.NewRunner(s.collection))
+	s.txnRunner = jujutxn.NewRunner(txn.NewRunner(s.collection))
 }
 
 func (s *txnSuite) TearDownTest(c *gc.C) {
 	s.MgoSuite.TearDownTest(c)
-	s.BaseSuite.TearDownTest(c)
+	s.IsolationSuite.TearDownTest(c)
 }
 
 type simpleDoc struct {
@@ -209,7 +208,7 @@ func (s *txnSuite) TestExcessiveContention(c *gc.C) {
 		return ops, nil
 	}
 	err := s.txnRunner.Run(buildTxn)
-	c.Assert(err, gc.Equals, statetxn.ErrExcessiveContention)
+	c.Assert(err, gc.Equals, jujutxn.ErrExcessiveContention)
 	c.Assert(maxAttempt, gc.Equals, 2)
 }
 
@@ -217,7 +216,7 @@ func (s *txnSuite) TestNothingToDo(c *gc.C) {
 	maxAttempt := 0
 	buildTxn := func(attempt int) ([]txn.Op, error) {
 		maxAttempt = attempt
-		return nil, statetxn.ErrNoOperations
+		return nil, jujutxn.ErrNoOperations
 	}
 	err := s.txnRunner.Run(buildTxn)
 	c.Assert(err, gc.Equals, nil)
@@ -230,7 +229,7 @@ func (s *txnSuite) TestTransientFailure(c *gc.C) {
 	buildTxn := func(attempt int) ([]txn.Op, error) {
 		maxAttempt = attempt
 		if attempt == 0 {
-			return nil, statetxn.ErrTransientFailure
+			return nil, jujutxn.ErrTransientFailure
 		}
 		ops := []txn.Op{{
 			C:      s.collection.Name,

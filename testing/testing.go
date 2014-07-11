@@ -1,12 +1,12 @@
 // Copyright 2014 Canonical Ltd.
-// Licensed under the AGPLv3, see LICENCE file for details.
+// Licensed under the LGPLv3, see LICENCE file for details.
 
 package testing
 
 import (
 	gc "launchpad.net/gocheck"
 
-	"github.com/juju/juju/state/txn"
+	"github.com/juju/txn"
 )
 
 // TransactionChecker values are returned from the various Set*Hooks calls,
