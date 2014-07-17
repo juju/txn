@@ -16,6 +16,7 @@ import (
 	stderrors "errors"
 
 	"github.com/juju/loggo"
+	"labix.org/v2/mgo"
 	"labix.org/v2/mgo/txn"
 )
 
@@ -56,18 +57,26 @@ type Runner interface {
 }
 
 type transactionRunner struct {
-	runner    *txn.Runner
+	db        *mgo.Database
 	testHooks chan ([]TestHook)
 }
 
 var _ Runner = (*transactionRunner)(nil)
 
 // NewRunner returns a Runner which delegates to the specified txn.Runner.
-func NewRunner(runner *txn.Runner) Runner {
-	txnRunner := &transactionRunner{runner: runner}
+func NewRunner(db *mgo.Database) Runner {
+	txnRunner := &transactionRunner{db: db}
 	txnRunner.testHooks = make(chan ([]TestHook), 1)
 	txnRunner.testHooks <- nil
 	return txnRunner
+}
+
+func (tr *transactionRunner) newSessionRunner() (*txn.Runner, func()) {
+	newSession := tr.db.Session.Copy()
+	newDb := newSession.DB(tr.db.Name)
+	runner := txn.NewRunner(newDb.C("txns"))
+	runner.ChangeLog(newDb.C("txns.log"))
+	return runner, newSession.Close
 }
 
 // Run is defined on Runner.
@@ -117,12 +126,16 @@ func (tr *transactionRunner) RunTransaction(ops []txn.Op) error {
 			logger.Infof("transaction 'before' hook end")
 		}
 	}
-	return tr.runner.Run(ops, "", nil)
+	runner, closer := tr.newSessionRunner()
+	defer closer()
+	return runner.Run(ops, "", nil)
 }
 
 // ResumeTransactions is defined on Runner.
 func (tr *transactionRunner) ResumeTransactions() error {
-	return tr.runner.ResumeAll()
+	runner, closer := tr.newSessionRunner()
+	defer closer()
+	return runner.ResumeAll()
 }
 
 // TestHook holds a pair of functions to be called before and after a
