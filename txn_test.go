@@ -38,7 +38,7 @@ func (s *txnSuite) SetUpTest(c *gc.C) {
 	s.MgoSuite.SetUpTest(c)
 	db := s.Session.DB("juju")
 	s.collection = db.C("test")
-	s.txnRunner = jujutxn.NewRunner(txn.NewRunner(s.collection))
+	s.txnRunner = jujutxn.NewRunner(s.collection.Database)
 }
 
 func (s *txnSuite) TearDownTest(c *gc.C) {
