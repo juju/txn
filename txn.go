@@ -16,13 +16,23 @@ import (
 	stderrors "errors"
 
 	"github.com/juju/loggo"
+	"labix.org/v2/mgo"
 	"labix.org/v2/mgo/txn"
 )
 
 var logger = loggo.GetLogger("juju.txn")
 
 const (
+	//nrRetries is the number of time a transaction will be retried
+	// when there is an invariant assertion failure.
 	nrRetries = 3
+
+	// defaultTxnCollectionName is the default name of the collection used
+	// to initialise the underlying mgo transaction runner.
+	defaultTxnCollectionName = "txns"
+
+	// defaultChangeLogName is the default mgo transaction runner change log.
+	defaultChangeLogName = "txns.log"
 )
 
 var (
@@ -56,18 +66,49 @@ type Runner interface {
 }
 
 type transactionRunner struct {
-	runner    *txn.Runner
-	testHooks chan ([]TestHook)
+	db                        *mgo.Database
+	transactionCollectionName string
+	changeLogName             string
+	testHooks                 chan ([]TestHook)
 }
 
 var _ Runner = (*transactionRunner)(nil)
 
-// NewRunner returns a Runner which delegates to the specified txn.Runner.
-func NewRunner(runner *txn.Runner) Runner {
-	txnRunner := &transactionRunner{runner: runner}
+// RunnerParams are used to construct a new transaction runner.
+// Only the Database value is mandatory, defaults will be used for
+// the other attributes if not specified.
+type RunnerParams struct {
+	Database                  *mgo.Database
+	TransactionCollectionName string
+	ChangeLogName             string
+}
+
+// NewRunner returns a Runner which runs transactions for the database specified in params.
+// Collection names used to manage the transactions and change log may also be specified in
+// params, but if not, default values will be used.
+func NewRunner(params RunnerParams) Runner {
+	txnRunner := &transactionRunner{
+		db: params.Database,
+		transactionCollectionName: params.TransactionCollectionName,
+		changeLogName:             params.ChangeLogName,
+	}
+	if txnRunner.transactionCollectionName == "" {
+		txnRunner.transactionCollectionName = defaultTxnCollectionName
+	}
+	if txnRunner.changeLogName == "" {
+		txnRunner.changeLogName = defaultChangeLogName
+	}
 	txnRunner.testHooks = make(chan ([]TestHook), 1)
 	txnRunner.testHooks <- nil
 	return txnRunner
+}
+
+func (tr *transactionRunner) newSessionRunner() (*txn.Runner, func()) {
+	newSession := tr.db.Session.Copy()
+	newDb := newSession.DB(tr.db.Name)
+	runner := txn.NewRunner(newDb.C(tr.transactionCollectionName))
+	runner.ChangeLog(newDb.C(tr.changeLogName))
+	return runner, newSession.Close
 }
 
 // Run is defined on Runner.
@@ -117,12 +158,16 @@ func (tr *transactionRunner) RunTransaction(ops []txn.Op) error {
 			logger.Infof("transaction 'before' hook end")
 		}
 	}
-	return tr.runner.Run(ops, "", nil)
+	runner, closer := tr.newSessionRunner()
+	defer closer()
+	return runner.Run(ops, "", nil)
 }
 
 // ResumeTransactions is defined on Runner.
 func (tr *transactionRunner) ResumeTransactions() error {
-	return tr.runner.ResumeAll()
+	runner, closer := tr.newSessionRunner()
+	defer closer()
+	return runner.ResumeAll()
 }
 
 // TestHook holds a pair of functions to be called before and after a
