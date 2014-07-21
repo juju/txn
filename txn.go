@@ -23,7 +23,7 @@ import (
 var logger = loggo.GetLogger("juju.txn")
 
 const (
-	//nrRetries is the number of time a transaction will be retried
+	// nrRetries is the number of time a transaction will be retried
 	// when there is an invariant assertion failure.
 	nrRetries = 3
 
@@ -78,9 +78,17 @@ var _ Runner = (*transactionRunner)(nil)
 // Only the Database value is mandatory, defaults will be used for
 // the other attributes if not specified.
 type RunnerParams struct {
-	Database                  *mgo.Database
+	// Database is the mgo database for which the transaction runner will be used.
+	Database *mgo.Database
+
+	// TransactionCollectionName is the name of the collection
+	// used to initialise the underlying mgo transaction runner,
+	// defaults to "txns" if unspecified.
 	TransactionCollectionName string
-	ChangeLogName             string
+
+	// ChangeLogName is the mgo transaction runner change log,
+	// defaults to "txns.log" if unspecified.
+	ChangeLogName string
 }
 
 // NewRunner returns a Runner which runs transactions for the database specified in params.
