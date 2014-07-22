@@ -113,9 +113,8 @@ func NewRunner(params RunnerParams) Runner {
 
 func (tr *transactionRunner) newSessionRunner() (*txn.Runner, func()) {
 	newSession := tr.db.Session.Copy()
-	newDb := newSession.DB(tr.db.Name)
-	runner := txn.NewRunner(newDb.C(tr.transactionCollectionName))
-	runner.ChangeLog(newDb.C(tr.changeLogName))
+	runner := txn.NewRunner(tr.db.C(tr.transactionCollectionName).With(newSession))
+	runner.ChangeLog(tr.db.C(tr.changeLogName).With(newSession))
 	return runner, newSession.Close
 }
 
