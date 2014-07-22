@@ -111,11 +111,11 @@ func NewRunner(params RunnerParams) Runner {
 	return txnRunner
 }
 
-func (tr *transactionRunner) newSessionRunner() (*txn.Runner, func()) {
-	newSession := tr.db.Session.Copy()
-	runner := txn.NewRunner(tr.db.C(tr.transactionCollectionName).With(newSession))
-	runner.ChangeLog(tr.db.C(tr.changeLogName).With(newSession))
-	return runner, newSession.Close
+func (tr *transactionRunner) newRunner() *txn.Runner {
+	db := tr.db
+	runner := txn.NewRunner(db.C(tr.transactionCollectionName))
+	runner.ChangeLog(db.C(tr.changeLogName))
+	return runner
 }
 
 // Run is defined on Runner.
@@ -165,15 +165,13 @@ func (tr *transactionRunner) RunTransaction(ops []txn.Op) error {
 			logger.Infof("transaction 'before' hook end")
 		}
 	}
-	runner, closer := tr.newSessionRunner()
-	defer closer()
+	runner := tr.newRunner()
 	return runner.Run(ops, "", nil)
 }
 
 // ResumeTransactions is defined on Runner.
 func (tr *transactionRunner) ResumeTransactions() error {
-	runner, closer := tr.newSessionRunner()
-	defer closer()
+	runner := tr.newRunner()
 	return runner.ResumeAll()
 }
 
