@@ -6,9 +6,9 @@ package txn_test
 import (
 	stdtesting "testing"
 
-	"github.com/juju/juju/testing"
+	"github.com/juju/testing"
 )
 
 func Test(t *stdtesting.T) {
-	testing.MgoTestPackage(t)
+	testing.MgoTestPackage(t, nil)
 }
