@@ -5,10 +5,10 @@ package txn_test
 
 import (
 	"github.com/juju/testing"
+	gc "gopkg.in/check.v1"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	"gopkg.in/mgo.v2/txn"
-	gc "gopkg.in/check.v1"
 
 	jujutxn "github.com/juju/txn"
 	txntesting "github.com/juju/txn/testing"
