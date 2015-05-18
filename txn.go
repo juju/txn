@@ -63,6 +63,11 @@ type Runner interface {
 
 	// ResumeTransactions resumes all pending transactions.
 	ResumeTransactions() error
+
+	// PruneTransactions removes data for completed transactions from
+	// mgo/txn's transaction collection. It is intended to be called
+	// periodically.
+	PruneTransactions() error
 }
 
 type transactionRunner struct {
@@ -173,6 +178,11 @@ func (tr *transactionRunner) RunTransaction(ops []txn.Op) error {
 func (tr *transactionRunner) ResumeTransactions() error {
 	runner := tr.newRunner()
 	return runner.ResumeAll()
+}
+
+// PruneTransactions is defined on Runner.
+func (tr *transactionRunner) PruneTransactions() error {
+	return pruneTxns(tr.db, tr.transactionCollectionName)
 }
 
 // TestHook holds a pair of functions to be called before and after a
