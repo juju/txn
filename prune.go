@@ -30,11 +30,12 @@ func isPruningRequired(txnsPrune, txns *mgo.Collection, pruneFactor float32) (bo
 
 	required := lastTxnsCount == 0 || float32(txnsCount) >= float32(lastTxnsCount)*pruneFactor
 
-	logger.Infof("txns after last prune: %d, txns now = %d, pruning required: %s", lastTxnsCount, txnsCount, required)
+	logger.Infof("txns after last prune: %d, txns now = %d, pruning required: %v", lastTxnsCount, txnsCount, required)
 	return required, nil
 }
 
 type pruneStats struct {
+	Id        string    `bson:"_id"`
 	Completed time.Time `bson:"completed"`
 	TxnsCount int       `bson:"txns-count"`
 }
@@ -58,11 +59,11 @@ func writePruneTxnsCount(txnsPrune, txns *mgo.Collection) error {
 	logger.Infof("txn pruning complete. txns now = %d", txnsCount)
 
 	doc := pruneStats{
+		Id:        "last",
 		Completed: time.Now(),
 		TxnsCount: txnsCount,
 	}
-
-	_, err = txnsPrune.Upsert(bson.M{"_id": "last"}, doc)
+	_, err := txnsPrune.UpsertId("last", doc)
 	return err
 }
 
