@@ -4,7 +4,8 @@
 package txn
 
 import (
-	"github.com/juju/errors"
+	"time"
+
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	"gopkg.in/mgo.v2/txn"
@@ -16,13 +17,69 @@ const (
 	tapplied = 6 // All changes applied
 )
 
+func isPruningRequired(txnsPrune, txns *mgo.Collection, pruneFactor float32) (bool, error) {
+	txnsCount, err := txns.Count()
+	if err != nil {
+		return false, err
+	}
+
+	lastTxnsCount, err := getPruneTxnsCount(txnsPrune)
+	if err != nil {
+		return false, err
+	}
+
+	required := lastTxnsCount == 0 || float32(txnsCount) >= float32(lastTxnsCount)*pruneFactor
+
+	logger.Infof("txns after last prune: %d, txns now = %d, pruning required: %s", lastTxnsCount, txnsCount, required)
+	return required, nil
+}
+
+type pruneStats struct {
+	Completed time.Time `bson:"completed"`
+	TxnsCount int       `bson:"txns-count"`
+}
+
+func getPruneTxnsCount(txnsPrune *mgo.Collection) (int, error) {
+	var doc pruneStats
+	err := txnsPrune.FindId("last").One(&doc)
+	if err == mgo.ErrNotFound {
+		return 0, nil
+	} else if err != nil {
+		return -1, err
+	}
+	return doc.TxnsCount, nil
+}
+
+func writePruneTxnsCount(txnsPrune, txns *mgo.Collection) error {
+	txnsCount, err := txns.Count()
+	if err != nil {
+		return err
+	}
+	logger.Infof("txn pruning complete. txns now = %d", txnsCount)
+
+	doc := pruneStats{
+		Completed: time.Now(),
+		TxnsCount: txnsCount,
+	}
+
+	_, err = txnsPrune.Upsert(bson.M{"_id": "last"}, doc)
+	return err
+}
+
+func txnsPruneC(txnsName string) string {
+	return txnsName + ".prune"
+}
+
 // pruneTxns removes applied and aborted entries from the txns
 // collection that are no longer referenced by any document.
+//
+// Warning: this is a fairly heavyweight activity and therefore should
+// be done infrequently.
 //
 // TODO(mjs) - this knows way too much about mgo/txn's internals and
 // with a bit of luck something like this will one day be part of
 // mgo/txn.
-func pruneTxns(db *mgo.Database, txnsName string) error {
+func pruneTxns(db *mgo.Database, txns *mgo.Collection) error {
 	present := struct{}{}
 
 	// Load the ids of all completed txns and all collections
@@ -31,7 +88,6 @@ func pruneTxns(db *mgo.Database, txnsName string) error {
 	// This set could potentially contain many entries, however even
 	// 500,000 entries requires only ~44MB of memory. Given that the
 	// memory hit is short-lived this is probably acceptable.
-	txns := db.C(txnsName)
 	txnIds := make(map[bson.ObjectId]struct{})
 	collNames := make(map[string]struct{})
 
@@ -51,7 +107,7 @@ func pruneTxns(db *mgo.Database, txnsName string) error {
 		}
 	}
 	if err := iter.Close(); err != nil {
-		return errors.Annotate(err, "failed to read all known txn ids")
+		return err
 	}
 
 	// Transactions may also be referenced in the stash.
@@ -77,13 +133,13 @@ func pruneTxns(db *mgo.Database, txnsName string) error {
 			}
 		}
 		if err := iter.Close(); err != nil {
-			return errors.Annotatef(err, "failed to read all documents for collection %q", collName)
+			return err
 		}
 	}
 
 	// Remove the unreferenced transactions.
 	err := bulkRemoveTxns(txns, txnIds)
-	return errors.Trace(err)
+	return err
 }
 
 func txnTokenToId(token string) bson.ObjectId {
@@ -104,7 +160,7 @@ func bulkRemoveTxns(txns *mgo.Collection, txnIds map[bson.ObjectId]struct{}) err
 			// may have concurrently pruned them.
 			return nil
 		default:
-			return errors.Annotatef(err, "failed to prune transactions")
+			return err
 		}
 	}
 
@@ -114,14 +170,14 @@ func bulkRemoveTxns(txns *mgo.Collection, txnIds map[bson.ObjectId]struct{}) err
 		chunk = append(chunk, txnId)
 		if len(chunk) == chunkMax {
 			if err := removeTxns(chunk); err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			chunk = chunk[:0] // Avoid reallocation.
 		}
 	}
 	if len(chunk) > 0 {
 		if err := removeTxns(chunk); err != nil {
-			return errors.Trace(err)
+			return err
 		}
 	}
 

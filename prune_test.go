@@ -37,13 +37,13 @@ func (s *PruneSuite) TearDownSuite(c *gc.C) {
 	s.MgoSuite.TearDownSuite(c)
 }
 
-func (s *PruneSuite) prune(c *gc.C) {
+func (s *PruneSuite) maybePrune(c *gc.C, pruneFactor float32) {
 	r := jujutxn.NewRunner(jujutxn.RunnerParams{
 		Database:                  s.db,
 		TransactionCollectionName: s.txns.Name,
 		ChangeLogName:             s.txns.Name + ".log",
 	})
-	err := r.PruneTransactions()
+	err := r.MaybePruneTransactions(pruneFactor)
 	c.Assert(err, jc.ErrorIsNil)
 }
 
@@ -73,7 +73,7 @@ func (s *PruneSuite) TestSingleCollection(c *gc.C) {
 	// Ensure that expected number of transactions were created.
 	s.assertCollCount(c, "txns", numDocs+(numDocs*updatesPerDoc))
 
-	s.prune(c)
+	s.maybePrune(c, 1)
 
 	// Confirm that only the records for the most recent transactions
 	// for each document were kept.
@@ -114,7 +114,7 @@ func (s *PruneSuite) TestMultipleDocumentsInOneTxn(c *gc.C) {
 		Update: bson.M{},
 	})
 
-	s.prune(c)
+	s.maybePrune(c, 1)
 
 	// Only the last transaction should be left.
 	s.assertTxns(c, txnId)
@@ -173,7 +173,7 @@ func (s *PruneSuite) TestMultipleCollections(c *gc.C) {
 	})
 	lastTxnIds = append(lastTxnIds, txnId)
 
-	s.prune(c)
+	s.maybePrune(c, 1)
 	s.assertTxns(c, lastTxnIds...)
 }
 
@@ -195,7 +195,7 @@ func (s *PruneSuite) TestWithStash(c *gc.C) {
 	})
 	s.assertCollCount(c, "txns.stash", 1)
 
-	s.prune(c)
+	s.maybePrune(c, 1)
 	s.assertTxns(c, txnId0, txnId1)
 }
 
@@ -221,7 +221,7 @@ func (s *PruneSuite) TestInProgressInsertNotPruned(c *gc.C) {
 	})
 	c.Assert(err, jc.ErrorIsNil)
 
-	s.prune(c)
+	s.maybePrune(c, 1)
 	s.assertTxns(c, txnId)
 }
 
@@ -253,7 +253,7 @@ func (s *PruneSuite) TestInProgressUpdateNotPruned(c *gc.C) {
 	})
 	c.Assert(err, jc.ErrorIsNil)
 
-	s.prune(c)
+	s.maybePrune(c, 1)
 	s.assertTxns(c, txnIdInsert, txnIdUpdate)
 }
 
@@ -276,7 +276,7 @@ func (s *PruneSuite) TestAbortedTxnsArePruned(c *gc.C) {
 		Update: bson.M{},
 	})
 
-	s.prune(c)
+	s.maybePrune(c, 1)
 	s.assertTxns(c, txnId)
 }
 
@@ -297,8 +297,88 @@ func (s *PruneSuite) TestManyTxnRemovals(c *gc.C) {
 	}
 	s.assertCollCount(c, "txns", 3001)
 
-	s.prune(c)
+	s.maybePrune(c, 1)
 	s.assertTxns(c, lastTxnId)
+}
+
+func (s *PruneSuite) TestFirstRun(c *gc.C) {
+	// When there's no pruning stats recorded pruning should always
+	// happen.
+
+	// Create a few txns.
+	s.runTxn(c, txn.Op{
+		C:      "coll",
+		Id:     0,
+		Insert: bson.M{},
+	})
+	for i := 0; i < 9; i++ {
+		s.runTxn(c, txn.Op{
+			C:      "coll",
+			Id:     0,
+			Update: bson.M{},
+		})
+	}
+	s.assertCollCount(c, "txns", 10)
+
+	s.maybePrune(c, 2.0)
+
+	s.assertCollCount(c, "txns", 1)
+	s.assertLastPruneCount(c, 1)
+}
+
+func (s *PruneSuite) TestPruningRequired(c *gc.C) {
+	// Create 10 txns across 2 docs.
+	for id := 0; id < 2; id++ {
+		s.runTxn(c, txn.Op{
+			C:      "coll",
+			Id:     id,
+			Insert: bson.M{},
+		})
+		for i := 0; i < 4; i++ {
+			s.runTxn(c, txn.Op{
+				C:      "coll",
+				Id:     id,
+				Update: bson.M{},
+			})
+		}
+	}
+	s.assertCollCount(c, "txns", 10)
+
+	// Fake that the last txns size was 2 documents so that pruning
+	// should be triggered.
+	s.setLastPruneCount(c, 2)
+
+	s.maybePrune(c, 2.0)
+
+	s.assertCollCount(c, "txns", 2)
+	s.assertLastPruneCount(c, 2)
+}
+
+func (s *PruneSuite) TestPruningNotRequired(c *gc.C) {
+	// Create a few txns.
+	s.runTxn(c, txn.Op{
+		C:      "coll",
+		Id:     0,
+		Insert: bson.M{},
+	})
+	for i := 0; i < 9; i++ {
+		s.runTxn(c, txn.Op{
+			C:      "coll",
+			Id:     0,
+			Update: bson.M{},
+		})
+	}
+	s.assertCollCount(c, "txns", 10)
+
+	// Set the last txns count such that pruning won't be triggered
+	// with a factor of 2.0  (6 * 2.0 > 10).
+	s.setLastPruneCount(c, 6)
+
+	s.maybePrune(c, 2.0)
+
+	// Pruning shouldn't have happened.
+	s.assertCollCount(c, "txns", 10)
+	s.assertLastPruneCount(c, 6)
 }
 
 func (s *PruneSuite) runTxn(c *gc.C, ops ...txn.Op) bson.ObjectId {
@@ -328,7 +408,27 @@ func (s *PruneSuite) assertTxns(c *gc.C, expectedIds ...bson.ObjectId) {
 }
 
 func (s *PruneSuite) assertCollCount(c *gc.C, collName string, expectedCount int) {
-	count, err := s.db.C(collName).Count()
-	c.Assert(err, jc.ErrorIsNil)
+	count := s.getCollCount(c, collName)
 	c.Assert(count, gc.Equals, expectedCount)
+}
+
+func (s *PruneSuite) getCollCount(c *gc.C, collName string) int {
+	n, err := s.db.C(collName).Count()
+	c.Assert(err, jc.ErrorIsNil)
+	return n
+}
+
+func (s *PruneSuite) setLastPruneCount(c *gc.C, count int) {
+	err := s.db.C("txns.prune").Insert(bson.M{
+		"_id":        "last",
+		"txns-count": count,
+	})
+	c.Assert(err, jc.ErrorIsNil)
+}
+
+func (s *PruneSuite) assertLastPruneCount(c *gc.C, expected int) {
+	var doc bson.M
+	err := s.db.C("txns.prune").FindId("last").One(&doc)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Assert(doc["txns-count"], gc.Equals, expected)
 }

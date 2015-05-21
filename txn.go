@@ -64,10 +64,16 @@ type Runner interface {
 	// ResumeTransactions resumes all pending transactions.
 	ResumeTransactions() error
 
-	// PruneTransactions removes data for completed transactions from
-	// mgo/txn's transaction collection. It is intended to be called
-	// periodically.
-	PruneTransactions() error
+	// MaybePruneTransactions removes data for completed transactions
+	// from mgo/txn's transaction collection. It is intended to be
+	// called periodically.
+	//
+	// Pruning is an I/O heavy activity so it will only be undertaken
+	// if:
+	//
+	//   txn_count >= pruneFactor * txn_count_at_last_prune
+	//
+	MaybePruneTransactions(pruneFactor float32) error
 }
 
 type transactionRunner struct {
@@ -180,9 +186,25 @@ func (tr *transactionRunner) ResumeTransactions() error {
 	return runner.ResumeAll()
 }
 
-// PruneTransactions is defined on Runner.
-func (tr *transactionRunner) PruneTransactions() error {
-	return pruneTxns(tr.db, tr.transactionCollectionName)
+// MaybePruneTransactions is defined on Runner.
+func (tr *transactionRunner) MaybePruneTransactions(pruneFactor float32) error {
+	txns := tr.db.C(tr.transactionCollectionName)
+	txnsPrune := tr.db.C(txnsPruneC(tr.transactionCollectionName))
+
+	required, err := isPruningRequired(txnsPrune, txns, pruneFactor)
+	if err != nil {
+		return err
+	}
+
+	if required {
+		err := pruneTxns(tr.db, txns)
+		if err != nil {
+			return err
+		}
+		return writePruneTxnsCount(txnsPrune, txns)
+	}
+
+	return nil
 }
 
 // TestHook holds a pair of functions to be called before and after a
