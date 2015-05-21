@@ -344,9 +344,9 @@ func (s *PruneSuite) TestPruningRequired(c *gc.C) {
 	}
 	s.assertCollCount(c, "txns", 10)
 
-	// Fake that the last txns size was 2 documents so that pruning
-	// should be triggered.
-	s.setLastPruneCount(c, 2)
+	// Fake that the last txns size was 3 documents so that pruning
+	// should be triggered (3 * 2.0 <= 10).
+	s.setLastPruneCount(c, 3)
 
 	s.maybePrune(c, 2.0)
 
