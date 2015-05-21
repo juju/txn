@@ -63,7 +63,7 @@ func writePruneTxnsCount(txnsPrune, txns *mgo.Collection) error {
 		Completed: time.Now(),
 		TxnsCount: txnsCount,
 	}
-	_, err := txnsPrune.UpsertId("last", doc)
+	_, err = txnsPrune.UpsertId("last", doc)
 	return err
 }
 
