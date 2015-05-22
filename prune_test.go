@@ -4,6 +4,9 @@
 package txn_test
 
 import (
+	"time"
+
+	"github.com/juju/loggo"
 	jujutesting "github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
@@ -304,70 +307,34 @@ func (s *PruneSuite) TestManyTxnRemovals(c *gc.C) {
 func (s *PruneSuite) TestFirstRun(c *gc.C) {
 	// When there's no pruning stats recorded pruning should always
 	// happen.
-
-	// Create a few txns.
-	s.runTxn(c, txn.Op{
-		C:      "coll",
-		Id:     0,
-		Insert: bson.M{},
-	})
-	for i := 0; i < 9; i++ {
-		s.runTxn(c, txn.Op{
-			C:      "coll",
-			Id:     0,
-			Update: bson.M{},
-		})
-	}
+	s.makeTxnsForNewDoc(c, 10)
 	s.assertCollCount(c, "txns", 10)
 
 	s.maybePrune(c, 2.0)
 
 	s.assertCollCount(c, "txns", 1)
-	s.assertLastPruneCount(c, 1)
+	s.assertLastPruneStats(c, 10, 1)
+	s.assertPruneStatCount(c, 1)
 }
 
 func (s *PruneSuite) TestPruningRequired(c *gc.C) {
-	// Create 10 txns across 2 docs.
-	for id := 0; id < 2; id++ {
-		s.runTxn(c, txn.Op{
-			C:      "coll",
-			Id:     id,
-			Insert: bson.M{},
-		})
-		for i := 0; i < 4; i++ {
-			s.runTxn(c, txn.Op{
-				C:      "coll",
-				Id:     id,
-				Update: bson.M{},
-			})
-		}
-	}
+	s.makeTxnsForNewDoc(c, 5)
+	s.makeTxnsForNewDoc(c, 5)
 	s.assertCollCount(c, "txns", 10)
 
 	// Fake that the last txns size was 3 documents so that pruning
-	// should be triggered (3 * 2.0 <= 10).
+	// should be triggered (10 >= 3 * 2.0).
 	s.setLastPruneCount(c, 3)
 
 	s.maybePrune(c, 2.0)
 
 	s.assertCollCount(c, "txns", 2)
-	s.assertLastPruneCount(c, 2)
+	s.assertLastPruneStats(c, 10, 2)
+	s.assertPruneStatCount(c, 2)
 }
 
 func (s *PruneSuite) TestPruningNotRequired(c *gc.C) {
-	// Create a few txns.
-	s.runTxn(c, txn.Op{
-		C:      "coll",
-		Id:     0,
-		Insert: bson.M{},
-	})
-	for i := 0; i < 9; i++ {
-		s.runTxn(c, txn.Op{
-			C:      "coll",
-			Id:     0,
-			Update: bson.M{},
-		})
-	}
+	s.makeTxnsForNewDoc(c, 10)
 	s.assertCollCount(c, "txns", 10)
 
 	// Set the last txns count such that pruning won't be triggered
@@ -378,7 +345,70 @@ func (s *PruneSuite) TestPruningNotRequired(c *gc.C) {
 
 	// Pruning shouldn't have happened.
 	s.assertCollCount(c, "txns", 10)
-	s.assertLastPruneCount(c, 6)
+	s.assertPruneStatCount(c, 1)
+}
+
+func (s *PruneSuite) TestPruningStatsHistory(c *gc.C) {
+	s.maybePrune(c, 2.0)
+	s.assertLastPruneStats(c, 0, 0)
+	s.assertPruneStatCount(c, 1)
+
+	s.makeTxnsForNewDoc(c, 5)
+
+	s.maybePrune(c, 2.0)
+	s.assertLastPruneStats(c, 5, 1)
+	s.assertPruneStatCount(c, 2)
+
+	s.makeTxnsForNewDoc(c, 11)
+
+	s.maybePrune(c, 2.0)
+	s.assertLastPruneStats(c, 12, 2)
+	s.assertPruneStatCount(c, 3)
+
+	s.makeTxnsForNewDoc(c, 5)
+
+	s.maybePrune(c, 2.0)
+	s.assertLastPruneStats(c, 7, 3)
+	s.assertPruneStatCount(c, 4)
+}
+
+func (s *PruneSuite) TestPruningStatsBrokenLastPointer(c *gc.C) {
+	// Create an initial pruning stats record.
+	s.maybePrune(c, 2.0)
+	s.assertLastPruneStats(c, 0, 0)
+	s.assertPruneStatCount(c, 1)
+
+	// Point the "last" pointer to a non-existent id.
+	err := s.db.C("txns.prune").UpdateId("last", bson.M{
+		"$set": bson.M{"id": bson.NewObjectId()},
+	})
+	c.Assert(err, jc.ErrorIsNil)
+
+	var tw loggo.TestWriter
+	c.Assert(loggo.RegisterWriter("test", &tw, loggo.WARNING), gc.IsNil)
+	defer loggo.RemoveWriter("test")
+
+	// Pruning should occur when "last" pointer is broken.
+	s.maybePrune(c, 2.0)
+	s.assertPruneStatCount(c, 2) // Note the new pruning stats record.
+	c.Assert(tw.Log(), jc.LogMatches,
+		[]jc.SimpleMessage{{loggo.WARNING, `pruning stats pointer was broken .+`}})
+}
+
+func (s *PruneSuite) makeTxnsForNewDoc(c *gc.C, count int) {
+	id := bson.NewObjectId()
+	s.runTxn(c, txn.Op{
+		C:      "coll",
+		Id:     id,
+		Insert: bson.M{},
+	})
+	for i := 0; i < count-1; i++ {
+		s.runTxn(c, txn.Op{
+			C:      "coll",
+			Id:     id,
+			Update: bson.M{},
+		})
+	}
 }
 
 func (s *PruneSuite) runTxn(c *gc.C, ops ...txn.Op) bson.ObjectId {
@@ -419,16 +449,49 @@ func (s *PruneSuite) getCollCount(c *gc.C, collName string) int {
 }
 
 func (s *PruneSuite) setLastPruneCount(c *gc.C, count int) {
+	id := bson.NewObjectId()
 	err := s.db.C("txns.prune").Insert(bson.M{
-		"_id":        "last",
-		"txns-count": count,
+		"_id":        id,
+		"txns-after": count,
+	})
+	c.Assert(err, jc.ErrorIsNil)
+
+	err = s.db.C("txns.prune").Insert(bson.M{
+		"_id": "last",
+		"id":  id,
 	})
 	c.Assert(err, jc.ErrorIsNil)
 }
 
-func (s *PruneSuite) assertLastPruneCount(c *gc.C, expected int) {
+func (s *PruneSuite) assertLastPruneStats(c *gc.C, txnsBefore, txnsAfter int) {
+	txnsPrune := s.db.C("txns.prune")
 	var doc bson.M
-	err := s.db.C("txns.prune").FindId("last").One(&doc)
+
+	err := txnsPrune.FindId("last").One(&doc)
 	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(doc["txns-count"], gc.Equals, expected)
+
+	err = txnsPrune.FindId(doc["id"]).One(&doc)
+	c.Assert(err, jc.ErrorIsNil)
+
+	c.Assert(doc["txns-before"].(int), gc.Equals, txnsBefore)
+	c.Assert(doc["txns-after"].(int), gc.Equals, txnsAfter)
+
+	started := doc["started"].(time.Time)
+	completed := doc["completed"].(time.Time)
+	c.Assert(completed.Sub(started) >= time.Duration(0), jc.IsTrue)
+	assertTimeIsRecent(c, started)
+	assertTimeIsRecent(c, completed)
+}
+
+func (s *PruneSuite) assertPruneStatCount(c *gc.C, expected int) {
+	txnsPrune := s.db.C("txns.prune")
+	actual, err := txnsPrune.Count()
+	c.Assert(err, jc.ErrorIsNil)
+
+	actual-- // Ignore "last" pointer document
+	c.Assert(actual, gc.Equals, expected)
+}
+
+func assertTimeIsRecent(c *gc.C, t time.Time) {
+	c.Assert(time.Now().Sub(t), jc.LessThan, time.Hour)
 }

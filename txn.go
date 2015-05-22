@@ -188,23 +188,7 @@ func (tr *transactionRunner) ResumeTransactions() error {
 
 // MaybePruneTransactions is defined on Runner.
 func (tr *transactionRunner) MaybePruneTransactions(pruneFactor float32) error {
-	txns := tr.db.C(tr.transactionCollectionName)
-	txnsPrune := tr.db.C(txnsPruneC(tr.transactionCollectionName))
-
-	required, err := isPruningRequired(txnsPrune, txns, pruneFactor)
-	if err != nil {
-		return err
-	}
-
-	if required {
-		err := pruneTxns(tr.db, txns)
-		if err != nil {
-			return err
-		}
-		return writePruneTxnsCount(txnsPrune, txns)
-	}
-
-	return nil
+	return maybePrune(tr.db, tr.transactionCollectionName, pruneFactor)
 }
 
 // TestHook holds a pair of functions to be called before and after a

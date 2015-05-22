@@ -4,6 +4,7 @@
 package txn
 
 import (
+	"fmt"
 	"time"
 
 	"gopkg.in/mgo.v2"
@@ -17,54 +18,96 @@ const (
 	tapplied = 6 // All changes applied
 )
 
-func isPruningRequired(txnsPrune, txns *mgo.Collection, pruneFactor float32) (bool, error) {
+type pruneStats struct {
+	Id         bson.ObjectId `bson:"_id"`
+	Started    time.Time     `bson:"started"`
+	Completed  time.Time     `bson:"completed"`
+	TxnsBefore int           `bson:"txns-before"`
+	TxnsAfter  int           `bson:"txns-after"`
+}
+
+func maybePrune(db *mgo.Database, txnsName string, pruneFactor float32) error {
+	txnsPrune := db.C(txnsPruneC(txnsName))
+	txns := db.C(txnsName)
+
 	txnsCount, err := txns.Count()
 	if err != nil {
-		return false, err
+		return fmt.Errorf("failed to retrieve starting txns count: %v", err)
 	}
-
-	lastTxnsCount, err := getPruneTxnsCount(txnsPrune)
+	lastTxnsCount, err := getPruneLastTxnsCount(txnsPrune)
 	if err != nil {
-		return false, err
+		return fmt.Errorf("failed to retrieve pruning stats: %v", err)
 	}
 
 	required := lastTxnsCount == 0 || float32(txnsCount) >= float32(lastTxnsCount)*pruneFactor
-
 	logger.Infof("txns after last prune: %d, txns now = %d, pruning required: %v", lastTxnsCount, txnsCount, required)
-	return required, nil
+
+	if required {
+		started := time.Now()
+		err := pruneTxns(txnsPrune.Database, txns)
+		if err != nil {
+			return err
+		}
+		completed := time.Now()
+
+		txnsCountAfter, err := txns.Count()
+		if err != nil {
+			return fmt.Errorf("failed to retrieve final txns count: %v", err)
+		}
+		logger.Infof("txn pruning complete. txns now = %d", txnsCountAfter)
+		return writePruneTxnsCount(txnsPrune, started, completed, txnsCount, txnsCountAfter)
+	}
+
+	return nil
 }
 
-type pruneStats struct {
-	Id        string    `bson:"_id"`
-	Completed time.Time `bson:"completed"`
-	TxnsCount int       `bson:"txns-count"`
-}
-
-func getPruneTxnsCount(txnsPrune *mgo.Collection) (int, error) {
-	var doc pruneStats
-	err := txnsPrune.FindId("last").One(&doc)
+func getPruneLastTxnsCount(txnsPrune *mgo.Collection) (int, error) {
+	// Retrieve the doc which points to the latest stats entry.
+	var ptrDoc bson.M
+	err := txnsPrune.FindId("last").One(&ptrDoc)
 	if err == mgo.ErrNotFound {
 		return 0, nil
 	} else if err != nil {
-		return -1, err
+		return -1, fmt.Errorf("failed to load pruning stats pointer: %v", err)
 	}
-	return doc.TxnsCount, nil
+
+	// Get the stats.
+	var doc pruneStats
+	err = txnsPrune.FindId(ptrDoc["id"]).One(&doc)
+	if err == mgo.ErrNotFound {
+		// Pointer was broken. Recover by returning 0 which will force
+		// pruning.
+		logger.Warningf("pruning stats pointer was broken - will recover")
+		return 0, nil
+	} else if err != nil {
+		return -1, fmt.Errorf("failed to load pruning stats: %v", err)
+	}
+	return doc.TxnsAfter, nil
 }
 
-func writePruneTxnsCount(txnsPrune, txns *mgo.Collection) error {
-	txnsCount, err := txns.Count()
+func writePruneTxnsCount(
+	txnsPrune *mgo.Collection,
+	started, completed time.Time,
+	txnsBefore, txnsAfter int,
+) error {
+	id := bson.NewObjectId()
+	err := txnsPrune.Insert(pruneStats{
+		Id:         id,
+		Started:    started,
+		Completed:  completed,
+		TxnsBefore: txnsBefore,
+		TxnsAfter:  txnsAfter,
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write prune stats: %v", err)
 	}
-	logger.Infof("txn pruning complete. txns now = %d", txnsCount)
 
-	doc := pruneStats{
-		Id:        "last",
-		Completed: time.Now(),
-		TxnsCount: txnsCount,
+	// Set pointer to latest stats document.
+	_, err = txnsPrune.UpsertId("last", bson.M{"$set": bson.M{"id": id}})
+	if err != nil {
+		return fmt.Errorf("failed to write prune stats pointer: %v", err)
 	}
-	_, err = txnsPrune.UpsertId("last", doc)
-	return err
+	return nil
 }
 
 func txnsPruneC(txnsName string) string {
@@ -108,7 +151,7 @@ func pruneTxns(db *mgo.Database, txns *mgo.Collection) error {
 		}
 	}
 	if err := iter.Close(); err != nil {
-		return err
+		return fmt.Errorf("failed to read all txns: %v", err)
 	}
 
 	// Transactions may also be referenced in the stash.
@@ -134,13 +177,16 @@ func pruneTxns(db *mgo.Database, txns *mgo.Collection) error {
 			}
 		}
 		if err := iter.Close(); err != nil {
-			return err
+			return fmt.Errorf("failed to read docs: %v", err)
 		}
 	}
 
 	// Remove the unreferenced transactions.
 	err := bulkRemoveTxns(txns, txnIds)
-	return err
+	if err != nil {
+		return fmt.Errorf("txn removal failed: %v", err)
+	}
+	return nil
 }
 
 func txnTokenToId(token string) bson.ObjectId {
