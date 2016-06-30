@@ -44,7 +44,7 @@ func maybePrune(db *mgo.Database, txnsName string, pruneFactor float32) error {
 
 	if required {
 		started := time.Now()
-		err := pruneTxns(txnsPrune.Database, txns)
+		err := PruneTxns(txnsPrune.Database, txns)
 		if err != nil {
 			return err
 		}
@@ -114,16 +114,21 @@ func txnsPruneC(txnsName string) string {
 	return txnsName + ".prune"
 }
 
-// pruneTxns removes applied and aborted entries from the txns
+// PruneTxns removes applied and aborted entries from the txns
 // collection that are no longer referenced by any document.
 //
 // Warning: this is a fairly heavyweight activity and therefore should
 // be done infrequently.
 //
+// PruneTxns is the low-level pruning function that does the actual
+// pruning work. It only exposed for external utilities to
+// call. Typical usage should be via Runner.MaybePruneTransactions
+// which wraps PruneTxns, only calling it when really necessary.
+//
 // TODO(mjs) - this knows way too much about mgo/txn's internals and
 // with a bit of luck something like this will one day be part of
 // mgo/txn.
-func pruneTxns(db *mgo.Database, txns *mgo.Collection) error {
+func PruneTxns(db *mgo.Database, txns *mgo.Collection) error {
 	present := struct{}{}
 
 	// Load the ids of all completed txns and all collections
