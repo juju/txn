@@ -14,9 +14,11 @@ package txn
 
 import (
 	stderrors "errors"
+	"strings"
 
 	"github.com/juju/loggo"
 	"gopkg.in/mgo.v2"
+	"gopkg.in/mgo.v2/bson"
 	"gopkg.in/mgo.v2/txn"
 )
 
@@ -76,11 +78,18 @@ type Runner interface {
 	MaybePruneTransactions(pruneFactor float32) error
 }
 
+type txnRunner interface {
+	Run([]txn.Op, bson.ObjectId, interface{}) error
+	ResumeAll() error
+}
+
 type transactionRunner struct {
 	db                        *mgo.Database
 	transactionCollectionName string
 	changeLogName             string
 	testHooks                 chan ([]TestHook)
+
+	newRunner func() txnRunner
 }
 
 var _ Runner = (*transactionRunner)(nil)
@@ -119,10 +128,11 @@ func NewRunner(params RunnerParams) Runner {
 	}
 	txnRunner.testHooks = make(chan ([]TestHook), 1)
 	txnRunner.testHooks <- nil
+	txnRunner.newRunner = txnRunner.newRunnerImpl
 	return txnRunner
 }
 
-func (tr *transactionRunner) newRunner() *txn.Runner {
+func (tr *transactionRunner) newRunnerImpl() txnRunner {
 	db := tr.db
 	runner := txn.NewRunner(db.C(tr.transactionCollectionName))
 	runner.ChangeLog(db.C(tr.changeLogName))
@@ -145,7 +155,13 @@ func (tr *transactionRunner) Run(transactions TransactionSource) error {
 		if err := tr.RunTransaction(ops); err == nil {
 			return nil
 		} else if err != txn.ErrAborted {
-			return err
+			// Mongo very occasionally returns an intermittent
+			// "unexpected message" error. Retry those.
+			// However if this is the last time, return that error
+			// rather than the excessive contention error.
+			if !strings.HasSuffix(err.Error(), "unexpected message") || i == (nrRetries-1) {
+				return err
+			}
 		}
 	}
 	return ErrExcessiveContention
