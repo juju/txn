@@ -88,6 +88,7 @@ type transactionRunner struct {
 	transactionCollectionName string
 	changeLogName             string
 	testHooks                 chan ([]TestHook)
+	runTransactionObserver    func([]txn.Op, error)
 
 	newRunner func() txnRunner
 }
@@ -109,6 +110,11 @@ type RunnerParams struct {
 	// ChangeLogName is the mgo transaction runner change log,
 	// defaults to "txns.log" if unspecified.
 	ChangeLogName string
+
+	// RunTransactionObserver, if non-nil, will be called when
+	// a Run or RunTransaction call has completed. It will be
+	// passed the txn.Ops and the error result.
+	RunTransactionObserver func([]txn.Op, error)
 }
 
 // NewRunner returns a Runner which runs transactions for the database specified in params.
@@ -119,6 +125,7 @@ func NewRunner(params RunnerParams) Runner {
 		db: params.Database,
 		transactionCollectionName: params.TransactionCollectionName,
 		changeLogName:             params.ChangeLogName,
+		runTransactionObserver:    params.RunTransactionObserver,
 	}
 	if txnRunner.transactionCollectionName == "" {
 		txnRunner.transactionCollectionName = defaultTxnCollectionName
@@ -193,7 +200,11 @@ func (tr *transactionRunner) RunTransaction(ops []txn.Op) error {
 		}
 	}
 	runner := tr.newRunner()
-	return runner.Run(ops, "", nil)
+	err := runner.Run(ops, "", nil)
+	if tr.runTransactionObserver != nil {
+		tr.runTransactionObserver(ops, err)
+	}
+	return err
 }
 
 // ResumeTransactions is defined on Runner.
