@@ -286,6 +286,35 @@ func (s *txnSuite) TestRunFailureAlwaysUnexpectedMessage(c *gc.C) {
 	c.Check(tries, gc.Equals, 3)
 }
 
+func (s *txnSuite) TestRunTransactionObserver(c *gc.C) {
+	type args struct {
+		ops []txn.Op
+		err error
+	}
+	var calls []args
+	runner := jujutxn.NewRunner(jujutxn.RunnerParams{
+		RunTransactionObserver: func(ops []txn.Op, err error) {
+			calls = append(calls, args{ops, err})
+		},
+	})
+	fake := &fakeRunner{errors: []error{
+		txn.ErrAborted,
+		nil,
+	}}
+	jujutxn.SetRunnerFunc(runner, fake.new)
+	ops := []txn.Op{{}}
+	buildTxn := func(attempt int) ([]txn.Op, error) {
+		return ops, nil
+	}
+	err := runner.Run(buildTxn)
+	c.Check(err, gc.IsNil)
+	c.Check(calls, gc.HasLen, 2)
+	c.Check(calls[0].ops, gc.DeepEquals, ops)
+	c.Check(calls[0].err, gc.Equals, txn.ErrAborted)
+	c.Check(calls[1].ops, gc.DeepEquals, ops)
+	c.Check(calls[1].err, gc.IsNil)
+}
+
 type fakeRunner struct {
 	jujutxn.TxnRunner
 	errors []error
