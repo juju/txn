@@ -51,7 +51,7 @@ func maybePrune(db *mgo.Database, txnsName string, pruneFactor float32) error {
 	}
 
 	required := lastTxnsCount == 0 || float32(txnsCount) >= float32(lastTxnsCount)*pruneFactor
-	logger.Infof("txns after last prune: %d, txns now = %d, pruning required: %v", lastTxnsCount, txnsCount, required)
+	logger.Infof("txns after last prune: %d, txns now: %d, pruning required: %v", lastTxnsCount, txnsCount, required)
 
 	if required {
 		started := time.Now()
@@ -65,7 +65,7 @@ func maybePrune(db *mgo.Database, txnsName string, pruneFactor float32) error {
 		if err != nil {
 			return fmt.Errorf("failed to retrieve final txns count: %v", err)
 		}
-		logger.Infof("txn pruning complete. txns now = %d", txnsCountAfter)
+		logger.Infof("txn pruning complete. txns now: %d", txnsCountAfter)
 		return writePruneTxnsCount(txnsPrune, started, completed, txnsCount, txnsCountAfter)
 	}
 
