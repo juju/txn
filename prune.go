@@ -17,7 +17,7 @@ const (
 	taborted = 5 // Pre-conditions failed, nothing done
 	tapplied = 6 // All changes applied
 
-	// maxBatchDocs defines the maximum MongoDB batch size.
+	// maxBatchDocs defines the maximum MongoDB batch size (in number of documents).
 	maxBatchDocs = 1616
 
 	// maxBulkOps defines the maximum number of operations in a bulk
@@ -27,19 +27,41 @@ const (
 	// logInterval defines often to report progress during long
 	// operations.
 	logInterval = 15 * time.Second
+
+	// maxIterCount is the number of times we will pass over the data to
+	// make sure all documents are cleaned up. (removing from a
+	// collection you are iterating can cause you to miss entries).
+	// The loop should exit early if it finds nothing to do anyway, so
+	// this only affects the number of times we will evaluate documents
+	// we aren't removing.
+	maxIterCount = 5
+
+	// maxMemoryTokens caps our in-memory cache. When it is full, we will
+	// apply our current list of items to process, and then flag the loop
+	// to run again. At 100k the maximum memory was around 200MB.
+	maxMemoryTokens = 50000
+
+	// queueBatchSize is the number of documents we will load before
+	// evaluating their transaction queues. This was found to be
+	// reasonably optimal when querying mongo.
+	queueBatchSize = 200
 )
 
 type pruneStats struct {
-	Id         bson.ObjectId `bson:"_id"`
-	Started    time.Time     `bson:"started"`
-	Completed  time.Time     `bson:"completed"`
-	TxnsBefore int           `bson:"txns-before"`
-	TxnsAfter  int           `bson:"txns-after"`
+	Id              bson.ObjectId `bson:"_id"`
+	Started         time.Time     `bson:"started"`
+	Completed       time.Time     `bson:"completed"`
+	TxnsBefore      int           `bson:"txns-before"`
+	TxnsAfter       int           `bson:"txns-after"`
+	StashDocsBefore int           `bson:"stash-docs-before"`
+	StashDocsAfter  int           `bson:"stash-docs-after"`
 }
 
 func maybePrune(db *mgo.Database, txnsName string, pruneFactor float32) error {
 	txnsPrune := db.C(txnsPruneC(txnsName))
 	txns := db.C(txnsName)
+	txnsStashName := txnsName + ".stash"
+	txnsStash := db.C(txnsStashName)
 
 	txnsCount, err := txns.Count()
 	if err != nil {
@@ -53,21 +75,37 @@ func maybePrune(db *mgo.Database, txnsName string, pruneFactor float32) error {
 	required := lastTxnsCount == 0 || float32(txnsCount) >= float32(lastTxnsCount)*pruneFactor
 	logger.Infof("txns after last prune: %d, txns now: %d, pruning required: %v", lastTxnsCount, txnsCount, required)
 
-	if required {
-		started := time.Now()
-		err := PruneTxns(txnsPrune.Database, txns)
-		if err != nil {
-			return err
-		}
-		completed := time.Now()
-
-		txnsCountAfter, err := txns.Count()
-		if err != nil {
-			return fmt.Errorf("failed to retrieve final txns count: %v", err)
-		}
-		logger.Infof("txn pruning complete. txns now: %d", txnsCountAfter)
-		return writePruneTxnsCount(txnsPrune, started, completed, txnsCount, txnsCountAfter)
+	if !required {
+		return nil
 	}
+	started := time.Now()
+
+	stashDocsBefore, err := txnsStash.Count()
+	if err != nil {
+		return fmt.Errorf("failed to retrieve starting %q count: %v", txnsStashName, err)
+	}
+
+	err = CleanupStash(txnsPrune.Database, txns, txnsStash)
+	if err != nil {
+		return err
+	}
+	err = PruneTxns(txnsPrune.Database, txns)
+	if err != nil {
+		return err
+	}
+	completed := time.Now()
+
+	txnsCountAfter, err := txns.Count()
+	if err != nil {
+		return fmt.Errorf("failed to retrieve final txns count: %v", err)
+	}
+	stashDocsAfter, err := txnsStash.Count()
+	if err != nil {
+		return fmt.Errorf("failed to retrieve final %q count: %v", txnsStashName, err)
+	}
+	logger.Infof("txn pruning complete. txns now: %d", txnsCountAfter)
+	return writePruneTxnsCount(txnsPrune, started, completed, txnsCount, txnsCountAfter,
+		stashDocsBefore, stashDocsAfter)
 
 	return nil
 }
@@ -99,15 +137,18 @@ func getPruneLastTxnsCount(txnsPrune *mgo.Collection) (int, error) {
 func writePruneTxnsCount(
 	txnsPrune *mgo.Collection,
 	started, completed time.Time,
-	txnsBefore, txnsAfter int,
+	txnsBefore, txnsAfter,
+	stashBefore, stashAfter int,
 ) error {
 	id := bson.NewObjectId()
 	err := txnsPrune.Insert(pruneStats{
-		Id:         id,
-		Started:    started,
-		Completed:  completed,
-		TxnsBefore: txnsBefore,
-		TxnsAfter:  txnsAfter,
+		Id:              id,
+		Started:         started,
+		Completed:       completed,
+		TxnsBefore:      txnsBefore,
+		TxnsAfter:       txnsAfter,
+		StashDocsBefore: stashBefore,
+		StashDocsAfter:  stashAfter,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to write prune stats: %v", err)

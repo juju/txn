@@ -193,26 +193,51 @@ func (s *PruneSuite) TestMultipleCollections(c *gc.C) {
 	s.assertTxns(c, lastTxnIds...)
 }
 
-func (s *PruneSuite) TestWithStash(c *gc.C) {
+func (s *PruneSuite) TestWithStashReference(c *gc.C) {
 	// Ensure that txns referenced in the stash are not pruned from
 	// the txns collection.
 
-	// An easy way to get something into the stash is to delete a
-	// document.
-	txnId0 := s.runTxn(c, txn.Op{
-		C:      "coll",
-		Id:     0,
-		Insert: bson.D{},
+	// An easy way to get something into the stash is to create a document, but have the transaction fail
+	txn.SetChaos(txn.Chaos{
+		KillChance: 1,
+		Breakpoint: "set-applying",
 	})
-	txnId1 := s.runTxn(c, txn.Op{
+	txnId := s.runFailingTxn(c, txn.ErrChaos, txn.Op{
 		C:      "coll",
 		Id:     0,
-		Remove: true,
+		Insert: bson.M{},
 	})
 	s.assertCollCount(c, "txns.stash", 1)
 
 	s.maybePrune(c, 1)
-	s.assertTxns(c, txnId0, txnId1)
+	s.assertTxns(c, txnId)
+}
+
+func (s *PruneSuite) TestStashCleanedUp(c *gc.C) {
+	// Test that items that were created and removed have been put into the stash, but now we're able to clean them
+	// up if all of their transactions have been marked completed.
+	txnId := s.runTxn(c, txn.Op{
+		C:      "coll",
+		Id:     0,
+		Insert: bson.M{},
+	})
+	addId := s.runTxn(c, txn.Op{
+		C:      "coll",
+		Id:     1,
+		Insert: bson.M{},
+	})
+	removeId := s.runTxn(c, txn.Op{
+		C:      "coll",
+		Id:     1,
+		Remove: true,
+	})
+	s.assertTxns(c, txnId, addId, removeId)
+	s.assertCollCount(c, "txns.stash", 1)
+	s.maybePrune(c, 1.0)
+	s.assertCollCount(c, "txns.stash", 0)
+	// The document 1 should be removed from the stash, no longer referencing either the
+	// insert or the remove which allows us to remove the transactions
+	s.assertTxns(c, txnId)
 }
 
 func (s *PruneSuite) TestInProgressInsertNotPruned(c *gc.C) {
