@@ -95,6 +95,14 @@ type collectionCleaner struct {
 	removeIfEmpty bool
 }
 
+func (stats CollectionStats) HasChanges() bool {
+	if stats.RemovedCount == 0 && stats.UpdatedDocCount == 0 &&
+		stats.PulledTokenCount == 0 {
+		return false
+	}
+	return true
+}
+
 func (stats CollectionStats) Details() string {
 	return fmt.Sprintf("processed %d documents, removed %d, updated %d (%d tokens)\n"+
 		"checked %d tokens (%d completed unique) across %d completed transactions",
@@ -275,7 +283,7 @@ func (cleaner *collectionCleaner) checkFlush() (bool, error) {
 	if err := cleaner.processStashDocs(); err != nil {
 		return false, err
 	}
-	if len(cleaner.docIdsToRemove) > cleaner.config.MaxRemoveQueue {
+	if len(cleaner.docIdsToRemove) < cleaner.config.MaxRemoveQueue {
 		return false, nil
 	}
 	if err := cleaner.flushRemoveQueue(); err != nil {
@@ -310,9 +318,9 @@ func (cleaner *collectionCleaner) flushRemoveQueue() error {
 // Cleanup iterates the collection and ensures that all documents no longer
 // reference completed transactions.
 func (cleaner *collectionCleaner) Cleanup() error {
-	logger.Debugf("cleaning up completed references from %q",
-		cleaner.config.Source.Name)
 	startCount, _ := cleaner.config.Source.Count()
+	logger.Debugf("cleaning up completed references from %q with %d docs",
+		cleaner.config.Source.Name, startCount)
 	t := newSimpleTimer(cleaner.config.LogInterval)
 	// If we delete documents while we iterate, it can cause the iterator to
 	// miss documents. So we do multiple passes on the database to make sure
@@ -362,7 +370,13 @@ func (cleaner *collectionCleaner) Cleanup() error {
 			break
 		}
 	}
-	logger.Debugf("%s", cleaner.stats.Details())
+	if cleaner.stats.HasChanges() {
+		logger.Debugf("%q %s",
+			cleaner.config.Source.Name, cleaner.stats.Details())
+	} else {
+		logger.Debugf("%q: nothing to do",
+			cleaner.config.Source.Name)
+	}
 	if cleaner.removeIfEmpty {
 		finalCount, _ := cleaner.config.Source.Count()
 		logger.Debugf("%s has %d documents left",

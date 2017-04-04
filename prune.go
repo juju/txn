@@ -20,6 +20,19 @@ const (
 	// maxBatchDocs defines the maximum MongoDB batch size (in number of documents).
 	maxBatchDocs = 1616
 
+	// defaultPruneFactor will be used if users don't request a pruneFactor
+	defaultPruneFactor = 2.0
+
+	// defaultMinNewTransactions will avoid pruning if there are only a
+	// small number of documents to prune. This is set because if a
+	// database can get to 0 txns, then any pruneFactor will always say
+	// that we should prune.
+	defaultMinNewTransactions = 100
+
+	// defaultMaxNewTransactions will trigger a prune if we see more than
+	// this many new transactions, even if pruneFactor hasn't been satisfied
+	defaultMaxNewTransactions = 100000
+
 	// maxBulkOps defines the maximum number of operations in a bulk
 	// operation.
 	maxBulkOps = 1000
@@ -57,7 +70,38 @@ type pruneStats struct {
 	StashDocsAfter  int           `bson:"stash-docs-after"`
 }
 
-func maybePrune(db *mgo.Database, txnsName string, pruneFactor float32) error {
+func validatePruneOptions(pruneOptions *PruneOptions) {
+	if pruneOptions.PruneFactor == 0 {
+		pruneOptions.PruneFactor = defaultPruneFactor
+	}
+	if pruneOptions.MinNewTransactions == 0 {
+		pruneOptions.MinNewTransactions = defaultMinNewTransactions
+	}
+	if pruneOptions.MaxNewTransactions == 0 {
+		pruneOptions.MaxNewTransactions = defaultMaxNewTransactions
+	}
+}
+
+func shouldPrune(oldCount, newCount int, pruneOptions PruneOptions) (bool, string) {
+	if oldCount < 0 {
+		return true, "no pruning run found"
+	}
+	difference := newCount - oldCount
+	if difference < pruneOptions.MinNewTransactions {
+		return false, "not enough new transactions"
+	}
+	if difference > pruneOptions.MaxNewTransactions {
+		return true, "too many new transactions"
+	}
+	factored := float32(oldCount) * pruneOptions.PruneFactor
+	if float32(newCount) >= factored {
+		return true, "transactions have grown significantly"
+	}
+	return false, "transactions have not grown significantly"
+}
+
+func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error {
+	validatePruneOptions(&pruneOpts)
 	txnsPrune := db.C(txnsPruneC(txnsName))
 	txns := db.C(txnsName)
 	txnsStashName := txnsName + ".stash"
@@ -72,8 +116,9 @@ func maybePrune(db *mgo.Database, txnsName string, pruneFactor float32) error {
 		return fmt.Errorf("failed to retrieve pruning stats: %v", err)
 	}
 
-	required := lastTxnsCount == 0 || float32(txnsCount) >= float32(lastTxnsCount)*pruneFactor
-	logger.Infof("txns after last prune: %d, txns now: %d, pruning required: %v", lastTxnsCount, txnsCount, required)
+	required, rationale := shouldPrune(lastTxnsCount, txnsCount, pruneOpts)
+	logger.Infof("txns after last prune: %d, txns now: %d, pruning required: %v %s",
+		lastTxnsCount, txnsCount, required, rationale)
 
 	if !required {
 		return nil
@@ -86,6 +131,10 @@ func maybePrune(db *mgo.Database, txnsName string, pruneFactor float32) error {
 	}
 
 	err = CleanupStash(txnsPrune.Database, txns, txnsStash)
+	if err != nil {
+		return err
+	}
+	err = CleanupAllCollections(txnsPrune.Database, txns)
 	if err != nil {
 		return err
 	}
@@ -110,12 +159,15 @@ func maybePrune(db *mgo.Database, txnsName string, pruneFactor float32) error {
 	return nil
 }
 
+// getPruneLastTxnsCount will return how many documents were in 'txns' the
+// last time we pruned. It will return -1 if it cannot find a reliable value
+// (no value available, or corrupted document.)
 func getPruneLastTxnsCount(txnsPrune *mgo.Collection) (int, error) {
 	// Retrieve the doc which points to the latest stats entry.
 	var ptrDoc bson.M
 	err := txnsPrune.FindId("last").One(&ptrDoc)
 	if err == mgo.ErrNotFound {
-		return 0, nil
+		return -1, nil
 	} else if err != nil {
 		return -1, fmt.Errorf("failed to load pruning stats pointer: %v", err)
 	}
@@ -127,7 +179,7 @@ func getPruneLastTxnsCount(txnsPrune *mgo.Collection) (int, error) {
 		// Pointer was broken. Recover by returning 0 which will force
 		// pruning.
 		logger.Warningf("pruning stats pointer was broken - will recover")
-		return 0, nil
+		return -1, nil
 	} else if err != nil {
 		return -1, fmt.Errorf("failed to load pruning stats: %v", err)
 	}
@@ -228,7 +280,8 @@ func PruneTxns(db *mgo.Database, txns *mgo.Collection) error {
 		var tDoc struct {
 			Queue []string `bson:"txn-queue"`
 		}
-		query := coll.Find(nil).Select(bson.M{"txn-queue": 1})
+		hasTxnQueueEntry := bson.M{"txn-queue.0": bson.M{"$exists": 1}}
+		query := coll.Find(hasTxnQueueEntry).Select(bson.M{"txn-queue": 1})
 		query.Batch(maxBatchDocs)
 		iter := query.Iter()
 		for iter.Next(&tDoc) {
@@ -287,7 +340,10 @@ func txnCollections(inNames []string, txnsName string) []string {
 		case name == txnsName+".stash":
 			return true // Need to look in the stash.
 		case name == txnsName, strings.HasPrefix(name, txnsName+"."):
-			// The txns collection and its childen shouldn't be considered.
+			// The txns collection and its children shouldn't be considered.
+			return false
+		case name == "statuseshistory":
+			// statuseshistory is a special case that doesn't use txn and does get fairly big, so skip it
 			return false
 		case strings.HasPrefix(name, "system."):
 			// Don't look in system collections.
@@ -305,6 +361,26 @@ func txnCollections(inNames []string, txnsName string) []string {
 		}
 	}
 	return outNames
+}
+
+// CleanupAllCollections iterates all collections that might have transaction queues and checks them to see if
+func CleanupAllCollections(db *mgo.Database, txns *mgo.Collection) error {
+	collNames, err := db.CollectionNames()
+	if err != nil {
+		return fmt.Errorf("reading collection names: %v", err)
+	}
+	collNames = txnCollections(collNames, txns.Name)
+	logger.Debugf("%d collections with txns to cleanup", len(collNames))
+	for _, name := range collNames {
+		cleaner := NewCollectionCleaner(CollectionConfig{
+			Txns:   txns,
+			Source: db.C(name),
+		})
+		if err := cleaner.Cleanup(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func txnTokenToId(token string) bson.ObjectId {

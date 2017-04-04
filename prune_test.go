@@ -59,7 +59,11 @@ func (s *PruneSuite) maybePrune(c *gc.C, pruneFactor float32) {
 		TransactionCollectionName: s.txns.Name,
 		ChangeLogName:             s.txns.Name + ".log",
 	})
-	err := r.MaybePruneTransactions(pruneFactor)
+	err := r.MaybePruneTransactions(jujutxn.PruneOptions{
+		PruneFactor:        pruneFactor,
+		MinNewTransactions: 1,
+		MaxNewTransactions: 1000,
+	})
 	c.Assert(err, jc.ErrorIsNil)
 }
 
@@ -69,7 +73,6 @@ func (s *PruneSuite) TestSingleCollection(c *gc.C) {
 	const numDocs = 5
 	const updatesPerDoc = 3
 
-	lastTxnIds := make([]bson.ObjectId, numDocs)
 	for id := 0; id < numDocs; id++ {
 		s.runTxn(c, txn.Op{
 			C:      "coll",
@@ -77,13 +80,22 @@ func (s *PruneSuite) TestSingleCollection(c *gc.C) {
 			Insert: bson.M{},
 		})
 
-		for txnNum := 0; txnNum < updatesPerDoc; txnNum++ {
-			lastTxnIds[id] = s.runTxn(c, txn.Op{
+		for txnNum := 0; txnNum < updatesPerDoc-1; txnNum++ {
+			s.runTxn(c, txn.Op{
 				C:      "coll",
 				Id:     id,
 				Update: bson.M{},
 			})
 		}
+	}
+	// Now create a transaction for each document that is interrupted
+	lastTxnIds := make([]bson.ObjectId, numDocs)
+	for id := 0; id < numDocs; id++ {
+		lastTxnIds[id] = s.runInterruptedTxn(c, txn.Op{
+			C:      "coll",
+			Id:     id,
+			Insert: bson.M{},
+		})
 	}
 
 	// Ensure that expected number of transactions were created.
@@ -94,6 +106,10 @@ func (s *PruneSuite) TestSingleCollection(c *gc.C) {
 	// Confirm that only the records for the most recent transactions
 	// for each document were kept.
 	s.assertTxns(c, lastTxnIds...)
+
+	for id := 0; id < numDocs; id++ {
+		s.assertDocQueue(c, "coll", id, lastTxnIds[id])
+	}
 
 	// Run another transaction on each of the docs to ensure mgo/txn
 	// is happy.
@@ -120,7 +136,7 @@ func (s *PruneSuite) TestMultipleDocumentsInOneTxn(c *gc.C) {
 	})
 
 	// Now update both documents in one transaction.
-	txnId := s.runTxn(c, txn.Op{
+	txnId := s.runInterruptedTxn(c, txn.Op{
 		C:      "coll",
 		Id:     0,
 		Update: bson.M{},
@@ -134,6 +150,8 @@ func (s *PruneSuite) TestMultipleDocumentsInOneTxn(c *gc.C) {
 
 	// Only the last transaction should be left.
 	s.assertTxns(c, txnId)
+	s.assertDocQueue(c, "coll", 0, txnId)
+	s.assertDocQueue(c, "coll", 1, txnId)
 }
 
 func (s *PruneSuite) TestMultipleCollections(c *gc.C) {
@@ -147,9 +165,8 @@ func (s *PruneSuite) TestMultipleCollections(c *gc.C) {
 	})
 
 	// Update that document and create two more in other collections,
-	// all in one txn. This will be the last txn that touches coll0/0
-	// so it should not be pruned.
-	txnId := s.runTxn(c, txn.Op{
+	// all in one txn. The reference will be removed, so this will be pruned.
+	s.runTxn(c, txn.Op{
 		C:      "coll0",
 		Id:     0,
 		Update: bson.M{},
@@ -162,11 +179,10 @@ func (s *PruneSuite) TestMultipleCollections(c *gc.C) {
 		Id:     0,
 		Insert: bson.M{},
 	})
-	lastTxnIds = append(lastTxnIds, txnId)
 
-	// Update coll1 and coll2 docs together. This will be the last txn
-	// to touch coll1/0 and coll2/0 so it should not be pruned.
-	txnId = s.runTxn(c, txn.Op{
+	// Update coll1 and coll2 docs together. This will be touching
+	// coll1/0 and coll2/0 so it should not be pruned.
+	txnId1 := s.runInterruptedTxn(c, txn.Op{
 		C:      "coll1",
 		Id:     0,
 		Update: bson.M{},
@@ -175,10 +191,10 @@ func (s *PruneSuite) TestMultipleCollections(c *gc.C) {
 		Id:     0,
 		Update: bson.M{},
 	})
-	lastTxnIds = append(lastTxnIds, txnId)
+	lastTxnIds = append(lastTxnIds, txnId1)
 
 	// Insert more documents into coll0 and coll1.
-	txnId = s.runTxn(c, txn.Op{
+	txnId2 := s.runInterruptedTxn(c, txn.Op{
 		C:      "coll0",
 		Id:     1,
 		Insert: bson.M{},
@@ -187,22 +203,34 @@ func (s *PruneSuite) TestMultipleCollections(c *gc.C) {
 		Id:     1,
 		Insert: bson.M{},
 	})
-	lastTxnIds = append(lastTxnIds, txnId)
 
+	// Modifies existing documents that have pending transactions
+	txnId3 := s.runInterruptedTxn(c, txn.Op{
+		C:      "coll1",
+		Id:     0,
+		Update: bson.M{},
+	}, txn.Op{
+		C:      "coll0",
+		Id:     1,
+		Update: bson.M{},
+	})
 	s.maybePrune(c, 1)
-	s.assertTxns(c, lastTxnIds...)
+	s.assertTxns(c, txnId1, txnId2, txnId3)
+	// check that the transactions have been removed from documents
+	s.assertDocQueue(c, "coll1", 0, txnId1, txnId3)
+	s.assertDocQueue(c, "coll2", 0, txnId1)
+	// These documents are still in the stash because their insert got
+	// interrupted
+	s.assertStashDocQueue(c, "coll0", 1, txnId2, txnId3)
+	s.assertStashDocQueue(c, "coll1", 1, txnId2)
 }
 
 func (s *PruneSuite) TestWithStashReference(c *gc.C) {
 	// Ensure that txns referenced in the stash are not pruned from
 	// the txns collection.
 
-	// An easy way to get something into the stash is to create a document, but have the transaction fail
-	txn.SetChaos(txn.Chaos{
-		KillChance: 1,
-		Breakpoint: "set-applying",
-	})
-	txnId := s.runFailingTxn(c, txn.ErrChaos, txn.Op{
+	// An easy way to get something into the stash is to interrupt creating a document
+	txnId := s.runInterruptedTxn(c, txn.Op{
 		C:      "coll",
 		Id:     0,
 		Insert: bson.M{},
@@ -211,42 +239,43 @@ func (s *PruneSuite) TestWithStashReference(c *gc.C) {
 
 	s.maybePrune(c, 1)
 	s.assertTxns(c, txnId)
+	// And the doc still refers to the transaction that is creating it
+	s.assertStashDocQueue(c, "coll", 0, txnId)
 }
 
 func (s *PruneSuite) TestStashCleanedUp(c *gc.C) {
-	// Test that items that were created and removed have been put into the stash, but now we're able to clean them
-	// up if all of their transactions have been marked completed.
-	txnId := s.runTxn(c, txn.Op{
+	// Test that items that were created and removed have been put into the
+	// stash, but now we're able to clean them up if all of their
+	// transactions have been marked completed.
+	add0Id := s.runTxn(c, txn.Op{
 		C:      "coll",
 		Id:     0,
 		Insert: bson.M{},
 	})
-	addId := s.runTxn(c, txn.Op{
+	add1Id := s.runTxn(c, txn.Op{
 		C:      "coll",
 		Id:     1,
 		Insert: bson.M{},
 	})
-	removeId := s.runTxn(c, txn.Op{
+	remove1Id := s.runTxn(c, txn.Op{
 		C:      "coll",
 		Id:     1,
 		Remove: true,
 	})
-	s.assertTxns(c, txnId, addId, removeId)
+	s.assertTxns(c, add0Id, add1Id, remove1Id)
 	s.assertCollCount(c, "txns.stash", 1)
 	s.maybePrune(c, 1.0)
 	s.assertCollCount(c, "txns.stash", 0)
 	// The document 1 should be removed from the stash, no longer referencing either the
 	// insert or the remove which allows us to remove the transactions
-	s.assertTxns(c, txnId)
+	s.assertTxns(c)
+	s.assertDocQueue(c, "coll", 0)
+	// we can't assert the queue on id=1 because the doc no longer exists.
 }
 
 func (s *PruneSuite) TestInProgressInsertNotPruned(c *gc.C) {
 	// Create an incomplete insert transaction.
-	txn.SetChaos(txn.Chaos{
-		KillChance: 1,
-		Breakpoint: "set-applying",
-	})
-	txnId := s.runFailingTxn(c, txn.ErrChaos, txn.Op{
+	txnId := s.runInterruptedTxn(c, txn.Op{
 		C:      "coll",
 		Id:     0,
 		Insert: bson.M{},
@@ -269,7 +298,7 @@ func (s *PruneSuite) TestInProgressInsertNotPruned(c *gc.C) {
 func (s *PruneSuite) TestInProgressUpdateNotPruned(c *gc.C) {
 	// Create an insert transaction and then in-progress update
 	// transaction.
-	txnIdInsert := s.runTxn(c, txn.Op{
+	s.runTxn(c, txn.Op{
 		C:      "coll",
 		Id:     0,
 		Insert: bson.M{},
@@ -295,7 +324,27 @@ func (s *PruneSuite) TestInProgressUpdateNotPruned(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 
 	s.maybePrune(c, 1)
-	s.assertTxns(c, txnIdInsert, txnIdUpdate)
+	s.assertTxns(c, txnIdUpdate)
+}
+
+func (s *PruneSuite) TestInProgressUpdateNotCleaned(c *gc.C) {
+	// Create an insert transaction and then in-progress update
+	// transaction.
+	s.runTxn(c, txn.Op{
+		C:      "coll",
+		Id:     0,
+		Insert: bson.M{},
+	})
+
+	txnIdUpdate := s.runInterruptedTxn(c, txn.Op{
+		C:      "coll",
+		Id:     0,
+		Update: bson.M{},
+	})
+
+	s.maybePrune(c, 1)
+	s.assertTxns(c, txnIdUpdate)
+	s.assertDocQueue(c, "coll", 0, txnIdUpdate)
 }
 
 func (s *PruneSuite) TestAbortedTxnsArePruned(c *gc.C) {
@@ -310,8 +359,9 @@ func (s *PruneSuite) TestAbortedTxnsArePruned(c *gc.C) {
 		C:      "coll",
 		Id:     0,
 		Assert: txn.DocMissing, // Aborts because doc is already there.
+		Insert: bson.M{},
 	})
-	txnId := s.runTxn(c, txn.Op{
+	txnId := s.runInterruptedTxn(c, txn.Op{
 		C:      "coll",
 		Id:     0,
 		Update: bson.M{},
@@ -319,6 +369,7 @@ func (s *PruneSuite) TestAbortedTxnsArePruned(c *gc.C) {
 
 	s.maybePrune(c, 1)
 	s.assertTxns(c, txnId)
+	s.assertDocQueue(c, "coll", 0, txnId)
 }
 
 func (s *PruneSuite) TestManyTxnRemovals(c *gc.C) {
@@ -328,9 +379,8 @@ func (s *PruneSuite) TestManyTxnRemovals(c *gc.C) {
 		Id:     0,
 		Insert: bson.M{},
 	})
-	var lastTxnId bson.ObjectId
 	for i := 0; i < 3000; i++ {
-		lastTxnId = s.runTxn(c, txn.Op{
+		s.runTxn(c, txn.Op{
 			C:      "coll",
 			Id:     0,
 			Update: bson.M{},
@@ -339,7 +389,8 @@ func (s *PruneSuite) TestManyTxnRemovals(c *gc.C) {
 	s.assertCollCount(c, "txns", 3001)
 
 	s.maybePrune(c, 1)
-	s.assertTxns(c, lastTxnId)
+	s.assertTxns(c)
+	s.assertDocQueue(c, "coll", 0)
 }
 
 func (s *PruneSuite) TestFirstRun(c *gc.C) {
@@ -350,8 +401,8 @@ func (s *PruneSuite) TestFirstRun(c *gc.C) {
 
 	s.maybePrune(c, 2.0)
 
-	s.assertCollCount(c, "txns", 1)
-	s.assertLastPruneStats(c, 10, 1)
+	s.assertCollCount(c, "txns", 0)
+	s.assertLastPruneStats(c, 10, 0)
 	s.assertPruneStatCount(c, 1)
 }
 
@@ -366,8 +417,8 @@ func (s *PruneSuite) TestPruningRequired(c *gc.C) {
 
 	s.maybePrune(c, 2.0)
 
-	s.assertCollCount(c, "txns", 2)
-	s.assertLastPruneStats(c, 10, 2)
+	s.assertCollCount(c, "txns", 0)
+	s.assertLastPruneStats(c, 10, 0)
 	s.assertPruneStatCount(c, 2)
 }
 
@@ -394,19 +445,19 @@ func (s *PruneSuite) TestPruningStatsHistory(c *gc.C) {
 	s.makeTxnsForNewDoc(c, 5)
 
 	s.maybePrune(c, 2.0)
-	s.assertLastPruneStats(c, 5, 1)
+	s.assertLastPruneStats(c, 5, 0)
 	s.assertPruneStatCount(c, 2)
 
 	s.makeTxnsForNewDoc(c, 11)
 
 	s.maybePrune(c, 2.0)
-	s.assertLastPruneStats(c, 12, 2)
+	s.assertLastPruneStats(c, 11, 0)
 	s.assertPruneStatCount(c, 3)
 
 	s.makeTxnsForNewDoc(c, 5)
 
 	s.maybePrune(c, 2.0)
-	s.assertLastPruneStats(c, 7, 3)
+	s.assertLastPruneStats(c, 5, 0)
 	s.assertPruneStatCount(c, 4)
 }
 
@@ -463,6 +514,17 @@ func (s *PruneSuite) runFailingTxn(c *gc.C, expectedErr error, ops ...txn.Op) bs
 	return txnId
 }
 
+// runInterruptedTxn starts a transaction, but interrupts it just before it gets applied.
+func (s *PruneSuite) runInterruptedTxn(c *gc.C, ops ...txn.Op) bson.ObjectId {
+	txn.SetChaos(txn.Chaos{
+		KillChance: 1,
+		Breakpoint: "set-applying",
+	})
+	txnId := s.runFailingTxn(c, txn.ErrChaos, ops...)
+	txn.SetChaos(txn.Chaos{})
+	return txnId
+}
+
 func (s *PruneSuite) assertTxns(c *gc.C, expectedIds ...bson.ObjectId) {
 	var actualIds []bson.ObjectId
 	var txnDoc struct {
@@ -473,6 +535,32 @@ func (s *PruneSuite) assertTxns(c *gc.C, expectedIds ...bson.ObjectId) {
 		actualIds = append(actualIds, txnDoc.Id)
 	}
 	c.Assert(actualIds, jc.SameContents, expectedIds)
+}
+
+func (s *PruneSuite) assertDocQueue(c *gc.C, collection string, id interface{}, expectedIds ...bson.ObjectId) {
+	coll := s.db.C(collection)
+	var queueDoc struct {
+		Queue []string `bson:"txn-queue"`
+	}
+	err := coll.FindId(id).One(&queueDoc)
+	c.Assert(err, jc.ErrorIsNil)
+	txnIdsHex := make([]string, len(queueDoc.Queue))
+	for i, token := range queueDoc.Queue {
+		// strip of the _nonce
+		txnIdsHex[i] = token[:24]
+	}
+	expectedHex := make([]string, len(expectedIds))
+	for i, id := range expectedIds {
+		expectedHex[i] = id.Hex()
+	}
+	c.Check(txnIdsHex, gc.DeepEquals, expectedHex)
+}
+
+func (s *PruneSuite) assertStashDocQueue(c *gc.C, collection string, id interface{}, expectedIds ...bson.ObjectId) {
+	// Assert a pending/removed document that is currently in the stash.
+	// We identify it by the collection it would have been in.
+	stashId := bson.D{{"c", collection}, {"id", id}}
+	s.assertDocQueue(c, "txns.stash", stashId, expectedIds...)
 }
 
 func (s *PruneSuite) assertCollCount(c *gc.C, collName string, expectedCount int) {
