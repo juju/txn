@@ -100,6 +100,30 @@ func shouldPrune(oldCount, newCount int, pruneOptions PruneOptions) (bool, strin
 	return false, "transactions have not grown significantly"
 }
 
+func getOracle(db *mgo.Database, txns *mgo.Collection, txnsCount int, maxMemoryTxns int) Oracle {
+	var dbInfo struct {
+		VersionArray []int `bson:"versionArray"`
+	}
+	if txnsCount < maxMemoryTxns {
+		return NewMemOracle(txns)
+	}
+	if err := db.Run(bson.M{"buildInfo": 1}, &dbInfo); err != nil {
+		// If this failed, just use the memory Oracle
+		return NewMemOracle(txns)
+	}
+	if len(dbInfo.VersionArray) < 2 {
+		return NewMemOracle(txns)
+	}
+	// Check if we are < 3.2
+	if dbInfo.VersionArray[0] < 3 ||
+		(dbInfo.VersionArray[0] == 3 && dbInfo.VersionArray[1] < 2) {
+		return NewMemOracle(txns)
+	}
+	// We are using Mongo 3.2 with a large txn array, use the db-based
+	// oracle
+	return NewDBOracle(db, txns)
+}
+
 func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error {
 	validatePruneOptions(&pruneOpts)
 	txnsPrune := db.C(txnsPruneC(txnsName))
@@ -130,18 +154,7 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 		return fmt.Errorf("failed to retrieve starting %q count: %v", txnsStashName, err)
 	}
 
-	err = CleanupStash(txnsPrune.Database, txns, txnsStash)
-	if err != nil {
-		return err
-	}
-	err = CleanupAllCollections(txnsPrune.Database, txns)
-	if err != nil {
-		return err
-	}
-	err = PruneTxns(txnsPrune.Database, txns)
-	if err != nil {
-		return err
-	}
+	err = CleanAndPrune(db, txns, txnsCount)
 	completed := time.Now()
 
 	txnsCountAfter, err := txns.Count()
@@ -156,6 +169,39 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 	return writePruneTxnsCount(txnsPrune, started, completed, txnsCount, txnsCountAfter,
 		stashDocsBefore, stashDocsAfter)
 
+	return nil
+}
+
+// CleanAndPrune runs the cleanup steps, and then follows up with pruning all
+// of the transactions that are no longer referenced.
+func CleanAndPrune(db *mgo.Database, txns *mgo.Collection, txnsCountHint int) error {
+	if txnsCountHint <= 0 {
+		txnsCount, err := txns.Count()
+		if err != nil {
+			return err
+		}
+		txnsCountHint = txnsCount
+	}
+	oracle := getOracle(db, txns, txnsCountHint, maxMemoryTokens)
+	cleanup, err := oracle.Prepare()
+	defer cleanup()
+	if err != nil {
+		return err
+	}
+	txnsStashName := txns.Name + ".stash"
+	txnsStash := db.C(txnsStashName)
+
+	if err := CleanupStash(db, oracle, txnsStash); err != nil {
+		return err
+	}
+
+	if err := CleanupAllCollections(db, oracle, txns.Name); err != nil {
+		return err
+	}
+
+	if err := PruneTxns(db, oracle, txns); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -232,30 +278,8 @@ func txnsPruneC(txnsName string) string {
 // TODO(mjs) - this knows way too much about mgo/txn's internals and
 // with a bit of luck something like this will one day be part of
 // mgo/txn.
-func PruneTxns(db *mgo.Database, txns *mgo.Collection) error {
-	workingSetName := txns.Name + ".prunetemp"
-	workingSet := db.C(workingSetName)
-	defer workingSet.DropCollection()
-
-	// Load the ids of all completed and aborted txns into a separate
-	// temporary collection.
-	logger.Debugf("loading all completed transactions")
-	pipe := txns.Pipe([]bson.M{
-		// This used to use $in but that's much slower than $gte.
-		{"$match": bson.M{"s": bson.M{"$gte": taborted}}},
-		{"$project": bson.M{"_id": 1}},
-		{"$out": workingSetName},
-	})
-	pipe.Batch(maxBatchDocs)
-	pipe.AllowDiskUse()
-	if err := pipe.All(&bson.D{}); err != nil {
-		return fmt.Errorf("reading completed txns: %v", err)
-	}
-
-	count, err := workingSet.Count()
-	if err != nil {
-		return fmt.Errorf("getting txn count: %v", err)
-	}
+func PruneTxns(db *mgo.Database, oracle Oracle, txns *mgo.Collection) error {
+	count := oracle.Count()
 	logger.Debugf("%d completed txns found", count)
 
 	collNames, err := db.CollectionNames()
@@ -273,7 +297,8 @@ func PruneTxns(db *mgo.Database, txns *mgo.Collection) error {
 	// from the txns collection - is unsafe as it will result in the
 	// removal of transactions created during the pruning process.
 	t := newSimpleTimer(logInterval)
-	remover := newBulkRemover(workingSet)
+	toRemove := make([]bson.ObjectId, 0, maxBulkOps)
+	removedCount := 0
 	for _, collName := range collNames {
 		logger.Tracef("checking %s for txn references", collName)
 		coll := db.C(collName)
@@ -286,11 +311,17 @@ func PruneTxns(db *mgo.Database, txns *mgo.Collection) error {
 		iter := query.Iter()
 		for iter.Next(&tDoc) {
 			for _, token := range tDoc.Queue {
-				if err := remover.remove(txnTokenToId(token)); err != nil {
-					return fmt.Errorf("handling completed txns: %v", err)
-				}
+				txnId := txnTokenToId(token)
+				toRemove = append(toRemove, txnId)
 				if t.isAfter() {
-					logger.Debugf("%d referenced txns found so far", remover.removed)
+					logger.Debugf("%d referenced txns found so far", removedCount)
+				}
+				if len(toRemove) >= maxBulkOps {
+					removedCount += len(toRemove)
+					if err := oracle.RemoveTxns(toRemove); err != nil {
+						return fmt.Errorf("removing completed txns: %v", err)
+					}
+					toRemove = toRemove[:0]
 				}
 			}
 		}
@@ -298,21 +329,26 @@ func PruneTxns(db *mgo.Database, txns *mgo.Collection) error {
 			return fmt.Errorf("failed to read docs: %v", err)
 		}
 	}
-	if err := remover.flush(); err != nil {
-		return fmt.Errorf("handling completed txns: %v", err)
+	if len(toRemove) > 0 {
+		removedCount += len(toRemove)
+		if err := oracle.RemoveTxns(toRemove); err != nil {
+			return fmt.Errorf("removing completed txns: %v", err)
+		}
+		toRemove = toRemove[:0]
 	}
-	logger.Debugf("%d txns are still referenced and will be kept", remover.removed)
+	logger.Debugf("%d txns are still referenced and will be kept", removedCount)
 
 	// Remove the no-longer-referenced transactions from the txns collection.
 	t = newSimpleTimer(logInterval)
-	remover = newBulkRemover(txns)
-	query := workingSet.Find(nil).Batch(maxBatchDocs)
-	iter := query.Iter()
-	var doc struct {
-		ID bson.ObjectId `bson:"_id"`
+	remover := newBulkRemover(txns)
+	iter, err := oracle.IterTxns()
+	if err != nil {
+		return err
 	}
-	for iter.Next(&doc) {
-		if err := remover.remove(doc.ID); err != nil {
+	var loopErr error
+	var txnId bson.ObjectId
+	for txnId, loopErr = iter.Next(); loopErr == nil; txnId, loopErr = iter.Next() {
+		if err := remover.remove(txnId); err != nil {
 			return fmt.Errorf("removing txns: %v", err)
 		}
 		if t.isAfter() {
@@ -322,8 +358,8 @@ func PruneTxns(db *mgo.Database, txns *mgo.Collection) error {
 	if err := remover.flush(); err != nil {
 		return fmt.Errorf("removing txns: %v", err)
 	}
-	if err := iter.Close(); err != nil {
-		return fmt.Errorf("iterating through unreferenced txns: %v", err)
+	if loopErr != EOF {
+		return loopErr
 	}
 
 	logger.Debugf("pruning completed: removed %d txns", remover.removed)
@@ -364,16 +400,16 @@ func txnCollections(inNames []string, txnsName string) []string {
 }
 
 // CleanupAllCollections iterates all collections that might have transaction queues and checks them to see if
-func CleanupAllCollections(db *mgo.Database, txns *mgo.Collection) error {
+func CleanupAllCollections(db *mgo.Database, oracle Oracle, txnsName string) error {
 	collNames, err := db.CollectionNames()
 	if err != nil {
 		return fmt.Errorf("reading collection names: %v", err)
 	}
-	collNames = txnCollections(collNames, txns.Name)
+	collNames = txnCollections(collNames, txnsName)
 	logger.Debugf("%d collections with txns to cleanup", len(collNames))
 	for _, name := range collNames {
 		cleaner := NewCollectionCleaner(CollectionConfig{
-			Txns:   txns,
+			Oracle: oracle,
 			Source: db.C(name),
 		})
 		if err := cleaner.Cleanup(); err != nil {

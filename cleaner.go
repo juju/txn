@@ -13,8 +13,9 @@ import (
 
 // CollectionConfig is the definition of what we will be cleaning up.
 type CollectionConfig struct {
-	// Txns is the collection holding the Transaction documents.
-	Txns *mgo.Collection
+	// Oracle is an Oracle that we can use to determine if a given
+	// transaction token should be considered a 'completed' transaction.
+	Oracle Oracle
 
 	// Source is the mongo collection holding documents created and managed
 	// by transactions.
@@ -158,45 +159,13 @@ func (cleaner *collectionCleaner) includeDoc(doc txnDocument) error {
 // findCompletedTokens looks at the list of tokens and finds what txns are
 // referenced as completed, and then returns the set of tokens that are completed.
 func (cleaner *collectionCleaner) findCompletedTokens() (map[string]bool, error) {
-	objectIds := make([]bson.ObjectId, 0, len(cleaner.tokensToLookup))
+	result, err := cleaner.config.Oracle.CompletedTokens(cleaner.tokensToLookup)
 
-	// The nonce is generated during preparing, and if 2 flushers race,
-	// only one nonce makes it into the final transaction. However, other
-	// nonces can also be considered 'completed'. (afaict, they are ignored,
-	// thus won't be applied and can be considered completed.)
-	for _, token := range cleaner.tokensToLookup {
-		objId := txnTokenToId(token)
-		objectIds = append(objectIds, objId)
-	}
-	query := cleaner.config.Txns.Find(
-		bson.M{"_id": bson.M{"$in": objectIds},
-			"s": bson.M{"$in": []int{tapplied, taborted}}})
-	query = query.Select(bson.M{"_id": 1})
-	iter := query.Iter()
-	var txnDoc struct {
-		Id bson.ObjectId `bson:"_id"`
-	}
-	foundIdHex := make(map[string]bool, len(objectIds))
-	for iter.Next(&txnDoc) {
-		foundIdHex[txnDoc.Id.Hex()] = true
-	}
-	if err := iter.Close(); err != nil {
-		if err != mgo.ErrNotFound {
-			// Not found is ok, the transactions may not be complete
-			return nil, err
-		}
-	}
-	result := make(map[string]bool, len(foundIdHex))
-	for _, token := range cleaner.tokensToLookup {
-		objIdHex := txnTokenToId(token).Hex()
-		if foundIdHex[objIdHex] {
-			result[token] = true
-		}
-	}
 	cleaner.stats.TokenCount += len(cleaner.tokensToLookup)
 	cleaner.stats.CompletedTokenCount += len(result)
-	cleaner.stats.CompletedTxnCount += len(foundIdHex)
-	return result, nil
+	// TODO:
+	// cleaner.stats.CompletedTxnCount += len(foundIdHex)
+	return result, err
 }
 
 // findPullableTokens checks to see what transaction tokens should be removed
@@ -386,9 +355,9 @@ func (cleaner *collectionCleaner) Cleanup() error {
 }
 
 // CleanupStash goes through the txns.stash and removes documents that are no longer needed.
-func CleanupStash(db *mgo.Database, txns, txnsStash *mgo.Collection) error {
+func CleanupStash(db *mgo.Database, oracle Oracle, txnsStash *mgo.Collection) error {
 	cleaner := NewStashCleaner(CollectionConfig{
-		Txns:           txns,
+		Oracle: 	oracle,
 		Source:         txnsStash,
 		NumBatchTokens: queueBatchSize,
 		MaxRemoveQueue: maxMemoryTokens,
