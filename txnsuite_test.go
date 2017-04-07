@@ -23,11 +23,11 @@ type TxnSuite struct {
 func (s *TxnSuite) SetUpSuite(c *gc.C) {
 	s.IsolationSuite.SetUpSuite(c)
 	s.MgoSuite.SetUpSuite(c)
-	// Make sure we've removed any Chaos
-	s.AddCleanup(func(*gc.C) { txn.SetChaos(txn.Chaos{})})
 }
 
 func (s *TxnSuite) TearDownSuite(c *gc.C) {
+	// Make sure we've removed any Chaos
+	txn.SetChaos(txn.Chaos{})
 	s.MgoSuite.TearDownSuite(c)
 	s.IsolationSuite.TearDownSuite(c)
 }
@@ -36,8 +36,6 @@ func (s *TxnSuite) SetUpTest(c *gc.C) {
 	s.IsolationSuite.SetUpTest(c)
 	s.MgoSuite.SetUpTest(c)
 	txn.SetChaos(txn.Chaos{})
-	// Make sure we've removed any Chaos
-	s.AddCleanup(func(*gc.C) { txn.SetChaos(txn.Chaos{})})
 
 	s.db = s.Session.DB("mgo-test")
 	s.txns = s.db.C("txns")
@@ -45,6 +43,8 @@ func (s *TxnSuite) SetUpTest(c *gc.C) {
 }
 
 func (s *TxnSuite) TearDownTest(c *gc.C) {
+	// Make sure we've removed any Chaos
+	txn.SetChaos(txn.Chaos{})
 	s.MgoSuite.TearDownTest(c)
 	s.IsolationSuite.TearDownTest(c)
 }

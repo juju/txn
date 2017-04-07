@@ -100,27 +100,36 @@ func shouldPrune(oldCount, newCount int, pruneOptions PruneOptions) (bool, strin
 	return false, "transactions have not grown significantly"
 }
 
-func getOracle(db *mgo.Database, txns *mgo.Collection, txnsCount int, maxMemoryTxns int) Oracle {
+// checkMongoSupportsOut verifies that Mongo supports "$out" in an aggregation
+// pipeline. This was introduced in Mongo 3.2
+func checkMongoSupportsOut(db *mgo.Database) bool {
 	var dbInfo struct {
 		VersionArray []int `bson:"versionArray"`
 	}
-	if txnsCount < maxMemoryTxns {
-		return NewMemOracle(txns)
-	}
 	if err := db.Run(bson.M{"buildInfo": 1}, &dbInfo); err != nil {
-		// If this failed, just use the memory Oracle
-		return NewMemOracle(txns)
+		return false
 	}
 	if len(dbInfo.VersionArray) < 2 {
-		return NewMemOracle(txns)
+		return false
 	}
 	// Check if we are < 3.2
 	if dbInfo.VersionArray[0] < 3 ||
 		(dbInfo.VersionArray[0] == 3 && dbInfo.VersionArray[1] < 2) {
+		return false
+	}
+	return true
+}
+
+
+func getOracle(db *mgo.Database, txns *mgo.Collection, txnsCount int, maxMemoryTxns int) Oracle {
+	if txnsCount < maxMemoryTxns {
 		return NewMemOracle(txns)
 	}
 	// We are using Mongo 3.2 with a large txn array, use the db-based
 	// oracle
+	if !checkMongoSupportsOut(db) {
+		return NewMemOracle(txns)
+	}
 	return NewDBOracle(db, txns)
 }
 

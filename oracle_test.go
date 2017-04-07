@@ -34,6 +34,13 @@ var _ = gc.Suite(&DBOracleSuite{
 	},
 })
 
+func (s *DBOracleSuite) SetUpTest(c *gc.C) {
+	s.TxnSuite.SetUpTest(c)
+	if !jujutxn.CheckMongoSupportsOut(s.db) {
+		c.Skip("mongo does not support $out in aggregation pipelines")
+	}
+}
+
 func memOracleFunc(db *mgo.Database, c *mgo.Collection) jujutxn.Oracle {
 	return jujutxn.NewMemOracle(c)
 }
@@ -103,6 +110,7 @@ func (s *OracleSuite) TestRemovedTxns(c *gc.C) {
 	c.Assert(oracle, gc.NotNil)
 	cleanup, err := oracle.Prepare()
 	defer cleanup()
+	c.Assert(err, jc.ErrorIsNil)
 	token1 := s.txnToToken(c, txnId1)
 	token2 := s.txnToToken(c, txnId2)
 	completed, err := oracle.CompletedTokens([]string{token1, token2})
@@ -140,6 +148,7 @@ func (s *OracleSuite) TestIterTxns(c *gc.C) {
 	c.Assert(oracle, gc.NotNil)
 	cleanup, err := oracle.Prepare()
 	defer cleanup()
+	c.Assert(err, jc.ErrorIsNil)
 	c.Check(oracle.Count(), gc.Equals, 3)
 	oracle.RemoveTxns([]bson.ObjectId{txnId2})
 	c.Check(oracle.Count(), gc.Equals, 2)

@@ -12,3 +12,5 @@ func SetRunnerFunc(r Runner, f func() TxnRunner) {
 		return f()
 	}
 }
+
+var CheckMongoSupportsOut = checkMongoSupportsOut
