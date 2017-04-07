@@ -34,13 +34,6 @@ var _ = gc.Suite(&DBOracleSuite{
 	},
 })
 
-func (s *DBOracleSuite) SetUpTest(c *gc.C) {
-	s.TxnSuite.SetUpTest(c)
-	if !jujutxn.CheckMongoSupportsOut(s.db) {
-		c.Skip("mongo does not support $out in aggregation pipelines")
-	}
-}
-
 func memOracleFunc(db *mgo.Database, c *mgo.Collection) jujutxn.Oracle {
 	return jujutxn.NewMemOracle(c)
 }
@@ -66,6 +59,12 @@ func (s *OracleSuite) txnToToken(c *gc.C, id bson.ObjectId) string {
 }
 
 func (s *OracleSuite) TestKnownAndUnknownTxns(c *gc.C) {
+	// We can't put the Skip into SetUpTest because we are using a
+	// database connection, which needs to get cleaned up in TearDownTest
+	// and if you Skip in a SetUpTest it skips running the TearDownTest.
+	if !jujutxn.CheckMongoSupportsOut(s.db) {
+		c.Skip("mongo does not support $out in aggregation pipelines")
+	}
 	completedTxnId := s.runTxn(c, txn.Op{
 		C: "coll",
 		Id: 0,
@@ -96,6 +95,9 @@ func (s *OracleSuite) TestKnownAndUnknownTxns(c *gc.C) {
 }
 
 func (s *OracleSuite) TestRemovedTxns(c *gc.C) {
+	if !jujutxn.CheckMongoSupportsOut(s.db) {
+		c.Skip("mongo does not support $out in aggregation pipelines")
+	}
 	txnId1 := s.runTxn(c, txn.Op{
 		C: "coll",
 		Id: 0,
@@ -129,6 +131,9 @@ func (s *OracleSuite) TestRemovedTxns(c *gc.C) {
 }
 
 func (s *OracleSuite) TestIterTxns(c *gc.C) {
+	if !jujutxn.CheckMongoSupportsOut(s.db) {
+		c.Skip("mongo does not support $out in aggregation pipelines")
+	}
 	txnId1 := s.runTxn(c, txn.Op{
 		C: "coll",
 		Id: 0,

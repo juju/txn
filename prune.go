@@ -101,7 +101,8 @@ func shouldPrune(oldCount, newCount int, pruneOptions PruneOptions) (bool, strin
 }
 
 // checkMongoSupportsOut verifies that Mongo supports "$out" in an aggregation
-// pipeline. This was introduced in Mongo 3.2
+// pipeline. This was introduced in Mongo 2.6
+// https://docs.mongodb.com/manual/reference/operator/aggregation/out/
 func checkMongoSupportsOut(db *mgo.Database) bool {
 	var dbInfo struct {
 		VersionArray []int `bson:"versionArray"`
@@ -109,12 +110,13 @@ func checkMongoSupportsOut(db *mgo.Database) bool {
 	if err := db.Run(bson.M{"buildInfo": 1}, &dbInfo); err != nil {
 		return false
 	}
+	logger.Debugf("buildInfo reported: %v", dbInfo.VersionArray)
 	if len(dbInfo.VersionArray) < 2 {
 		return false
 	}
-	// Check if we are < 3.2
-	if dbInfo.VersionArray[0] < 3 ||
-		(dbInfo.VersionArray[0] == 3 && dbInfo.VersionArray[1] < 2) {
+	// Check if we are < 2.6
+	if dbInfo.VersionArray[0] < 2 ||
+		(dbInfo.VersionArray[0] == 2 && dbInfo.VersionArray[1] < 6) {
 		return false
 	}
 	return true
