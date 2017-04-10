@@ -100,37 +100,9 @@ func shouldPrune(oldCount, newCount int, pruneOptions PruneOptions) (bool, strin
 	return false, "transactions have not grown significantly"
 }
 
-// checkMongoSupportsOut verifies that Mongo supports "$out" in an aggregation
-// pipeline. This was introduced in Mongo 2.6
-// https://docs.mongodb.com/manual/reference/operator/aggregation/out/
-func checkMongoSupportsOut(db *mgo.Database) bool {
-	var dbInfo struct {
-		VersionArray []int `bson:"versionArray"`
-	}
-	if err := db.Run(bson.M{"buildInfo": 1}, &dbInfo); err != nil {
-		return false
-	}
-	logger.Debugf("buildInfo reported: %v", dbInfo.VersionArray)
-	if len(dbInfo.VersionArray) < 2 {
-		return false
-	}
-	// Check if we are at least 2.6
-	v := dbInfo.VersionArray
-	return v[0] > 2 || (v[0] == 2 && v[1] >= 6)
-}
-
 func getOracle(db *mgo.Database, txns *mgo.Collection, txnsCount int, maxMemoryTxns int) (Oracle, func(), error) {
 	// If we don't have very many transactions, just use the in-memory version
 	if txnsCount < maxMemoryTxns {
-		return NewMemOracle(txns)
-	}
-	if !checkMongoSupportsOut(db) {
-		// Mongo 2.4 doesn't support pipeline's using $out, so we have to fall
-		// back to the memory version.
-		// TODO(jam) 2017-04-10: https://github.com/juju/mgopurge/issues/8
-		// We should probably just have a flag on DBOracle that creates the
-		// working set directly, rather than OOMing because we loaded
-		// everything into memory
 		return NewMemOracle(txns)
 	}
 	return NewDBOracle(db, txns)

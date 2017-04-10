@@ -46,14 +46,34 @@ type Oracle interface {
 	IterTxns() (OracleIterator, error)
 }
 
+// checkMongoSupportsOut verifies that Mongo supports "$out" in an aggregation
+// pipeline. This was introduced in Mongo 2.6
+// https://docs.mongodb.com/manual/reference/operator/aggregation/out/
+func checkMongoSupportsOut(db *mgo.Database) bool {
+	var dbInfo struct {
+		VersionArray []int `bson:"versionArray"`
+	}
+	if err := db.Run(bson.M{"buildInfo": 1}, &dbInfo); err != nil {
+		return false
+	}
+	logger.Debugf("buildInfo reported: %v", dbInfo.VersionArray)
+	if len(dbInfo.VersionArray) < 2 {
+		return false
+	}
+	// Check if we are at least 2.6
+	v := dbInfo.VersionArray
+	return v[0] > 2 || (v[0] == 2 && v[1] >= 6)
+}
+
 // NewDBOracle uses a database collection to manage the queue of remaining
 // transactions.
 // The caller is responsible to call the returned cleanup() function, to ensure
 // that any resources are freed.
 func NewDBOracle(db *mgo.Database, txns *mgo.Collection) (*DBOracle, func(), error) {
 	oracle := &DBOracle{
-		db:   db,
-		txns: txns,
+		db:            db,
+		txns:          txns,
+		usingMongoOut: checkMongoSupportsOut(db),
 	}
 	cleanup, err := oracle.prepare()
 	return oracle, cleanup, err
@@ -69,9 +89,46 @@ type DBOracle struct {
 	db              *mgo.Database
 	txns            *mgo.Collection
 	working         *mgo.Collection
+	usingMongoOut   bool
 	checkedTokens   uint64
 	completedTokens uint64
 	foundTxns       uint64
+}
+
+// prepareWorkingDirectly iterates the working set from the pipeline and
+// populates the working set by inserting them from the client. This is less
+// efficient that a $out in the pipeline, but must be used when Mongo doesn't
+// support pipelines.
+func (o *DBOracle) prepareWorkingDirectly(pipeline []bson.M) error {
+	logger.Debugf("iterating the transactions collection to build the working set: %q", o.working.Name)
+	// Make sure the working set is clean
+	o.working.DropCollection()
+	pipe := o.txns.Pipe(pipeline)
+	pipe.Batch(maxBatchDocs)
+	pipe.AllowDiskUse()
+	iter := pipe.Iter()
+	var txnDoc struct {
+		Id bson.ObjectId `bson:"_id"`
+	}
+	for iter.Next(&txnDoc) {
+		// TODO(jam) 2017-04-10: Evaluate if it is worth batching up the
+		// documents read, to do inserts of many documents at once.
+		err := o.working.Insert(txnDoc)
+		if err != nil {
+			return err
+		}
+	}
+	return iter.Close()
+}
+
+// prepareWorkingWithPipeline adds a $out stage to the pipeline, and has mongo
+// populate the working set. This is the preferred method if Mongo supports $out.
+func (o *DBOracle) prepareWorkingWithPipeline(pipeline []bson.M) error {
+	pipeline = append(pipeline, bson.M{"$out": o.working.Name})
+	pipe := o.txns.Pipe(pipeline)
+	pipe.Batch(maxBatchDocs)
+	pipe.AllowDiskUse()
+	return pipe.All(&bson.D{})
 }
 
 func (o *DBOracle) prepare() (func(), error) {
@@ -84,15 +141,18 @@ func (o *DBOracle) prepare() (func(), error) {
 	// Load the ids of all completed and aborted txns into a separate
 	// temporary collection.
 	logger.Debugf("loading all completed transactions")
-	pipe := o.txns.Pipe([]bson.M{
+	pipeline := []bson.M{
 		// This used to use $in but that's much slower than $gte.
 		{"$match": bson.M{"s": bson.M{"$gte": taborted}}},
 		{"$project": bson.M{"_id": 1}},
-		{"$out": workingSetName},
-	})
-	pipe.Batch(maxBatchDocs)
-	pipe.AllowDiskUse()
-	if err := pipe.All(&bson.D{}); err != nil {
+	}
+	var err error
+	if o.usingMongoOut {
+		err = o.prepareWorkingWithPipeline(pipeline)
+	} else {
+		err = o.prepareWorkingDirectly(pipeline)
+	}
+	if err != nil {
 		o.cleanup()
 		return noopCleanup, fmt.Errorf("reading completed txns: %v", err)
 	}
