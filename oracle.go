@@ -110,12 +110,18 @@ func (o *DBOracle) prepareWorkingDirectly(pipeline []bson.M) error {
 	var txnDoc struct {
 		Id bson.ObjectId `bson:"_id"`
 	}
+	t := newSimpleTimer(logInterval)
+	docCount := 0
 	for iter.Next(&txnDoc) {
 		// TODO(jam) 2017-04-10: Evaluate if it is worth batching up the
 		// documents read, to do inserts of many documents at once.
 		err := o.working.Insert(txnDoc)
 		if err != nil {
 			return err
+		}
+		docCount++
+		if t.isAfter() {
+			logger.Debugf("copied %d documents", docCount)
 		}
 	}
 	return iter.Close()
