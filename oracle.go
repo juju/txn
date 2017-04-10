@@ -112,17 +112,32 @@ func (o *DBOracle) prepareWorkingDirectly(pipeline []bson.M) error {
 	}
 	t := newSimpleTimer(logInterval)
 	docCount := 0
+	docsToInsert := make([]interface{}, 0, maxBulkOps)
+	flush := func() error {
+		if len(docsToInsert) == 0 {
+			return nil
+		}
+		err := o.working.Insert(docsToInsert...)
+		docCount += len(docsToInsert)
+		docsToInsert = docsToInsert[:0]
+		return err
+	}
 	for iter.Next(&txnDoc) {
 		// TODO(jam) 2017-04-10: Evaluate if it is worth batching up the
 		// documents read, to do inserts of many documents at once.
-		err := o.working.Insert(txnDoc)
-		if err != nil {
-			return err
+		aCopy := txnDoc
+		docsToInsert = append(docsToInsert, aCopy)
+		if len(docsToInsert) >= maxBulkOps {
+			if err := flush(); err != nil {
+				return err
+			}
 		}
-		docCount++
 		if t.isAfter() {
 			logger.Debugf("copied %d documents", docCount)
 		}
+	}
+	if err := flush(); err != nil {
+		return err
 	}
 	return iter.Close()
 }
