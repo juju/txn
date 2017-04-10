@@ -314,6 +314,7 @@ func (o *MemOracle) prepare() error {
 	docCount := 0
 	for iter.Next(&txnId) {
 		completed[txnId.Id] = struct{}{}
+		docCount++
 		if t.isAfter() {
 			logger.Debugf("loaded %d documents", docCount)
 		}
