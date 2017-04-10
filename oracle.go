@@ -207,7 +207,7 @@ func (o *DBOracle) IterTxns() (OracleIterator, error) {
 // considered completed and purgeable.
 type MemOracle struct {
 	txns            *mgo.Collection
-	completed       map[bson.ObjectId]bool
+	completed       map[bson.ObjectId]struct{}
 	checkedTokens   uint64
 	completedTokens uint64
 	foundTxns       uint64
@@ -242,10 +242,10 @@ func (o *MemOracle) prepare() error {
 	var txnId struct {
 		Id bson.ObjectId `bson:"_id"`
 	}
-	completed := make(map[bson.ObjectId]bool, 1000)
+	completed := make(map[bson.ObjectId]struct{})
 	iter := pipe.Iter()
 	for iter.Next(&txnId) {
-		completed[txnId.Id] = true
+		completed[txnId.Id] = struct{}{}
 	}
 	if err := iter.Close(); err != nil {
 		return err
