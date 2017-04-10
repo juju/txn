@@ -117,6 +117,8 @@ func (o *DBOracle) prepareWorkingDirectly(pipeline []bson.M) error {
 	// copied 11M transaction ids.
 	// With a 1000 item batch, it took 20min to do copy 36M documents (approx
 	// 10x speedup)
+	// For reference, it is about 9min to use $out, and 13min to read the data
+	// into memory.
 	docsToInsert := make([]interface{}, 0, maxBulkOps)
 	flush := func() error {
 		if len(docsToInsert) == 0 {
@@ -315,6 +317,8 @@ func (o *MemOracle) prepare() error {
 	}
 	// Load the ids of all completed and aborted txns into a separate
 	// temporary collection.
+	// Max memory consumed when dealing with 36M transactions was around 4GB
+	// when testing this.
 	logger.Debugf("loading all completed transactions")
 	pipe := o.txns.Pipe([]bson.M{
 		// This used to use $in but that's much slower than $gte.
