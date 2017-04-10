@@ -269,8 +269,8 @@ func (o *DBOracle) IterTxns() (OracleIterator, error) {
 	return &dbIterWrapper{iter: iter}, nil
 }
 
-// MemOracle uses a temporary table on disk to track what transactions are
-// considered completed and purgeable.
+// MemOracle uses an in-memory cache to track what transactions are considered
+// completed and purgeable.
 type MemOracle struct {
 	txns            *mgo.Collection
 	completed       map[bson.ObjectId]struct{}
@@ -310,8 +310,13 @@ func (o *MemOracle) prepare() error {
 	}
 	completed := make(map[bson.ObjectId]struct{})
 	iter := pipe.Iter()
+	t := newSimpleTimer(logInterval)
+	docCount := 0
 	for iter.Next(&txnId) {
 		completed[txnId.Id] = struct{}{}
+		if t.isAfter() {
+			logger.Debugf("loaded %d documents", docCount)
+		}
 	}
 	if err := iter.Close(); err != nil {
 		return err
