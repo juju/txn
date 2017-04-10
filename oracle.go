@@ -112,6 +112,11 @@ func (o *DBOracle) prepareWorkingDirectly(pipeline []bson.M) error {
 	}
 	t := newSimpleTimer(logInterval)
 	docCount := 0
+	// Batching the insert into 1000 at a time made a dramatic improvement in
+	// time. Doing one-by-one insert after 1hr wall-clock time it had only
+	// copied 11M transaction ids.
+	// With a 1000 item batch, it took 20min to do copy 36M documents (approx
+	// 10x speedup)
 	docsToInsert := make([]interface{}, 0, maxBulkOps)
 	flush := func() error {
 		if len(docsToInsert) == 0 {
@@ -123,8 +128,6 @@ func (o *DBOracle) prepareWorkingDirectly(pipeline []bson.M) error {
 		return err
 	}
 	for iter.Next(&txnDoc) {
-		// TODO(jam) 2017-04-10: Evaluate if it is worth batching up the
-		// documents read, to do inserts of many documents at once.
 		aCopy := txnDoc
 		docsToInsert = append(docsToInsert, aCopy)
 		if len(docsToInsert) >= maxBulkOps {
