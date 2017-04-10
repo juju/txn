@@ -17,10 +17,17 @@ import (
 type OracleSuite struct {
 	TxnSuite
 	OracleFunc func(*mgo.Database, *mgo.Collection) (jujutxn.Oracle, func(), error)
+	PreCheck   func(*gc.C, *mgo.Database)
 }
 
 func dbOracleFunc(db *mgo.Database, c *mgo.Collection) (jujutxn.Oracle, func(), error) {
 	return jujutxn.NewDBOracle(db, c)
+}
+
+func dbCanRun(c *gc.C, db *mgo.Database) {
+	if !jujutxn.CheckMongoSupportsOut(db) {
+		c.Skip("mongo does not support $out in aggregation pipelines")
+	}
 }
 
 // DBOracleSuite causes the test suite to run against the DBOracle implementation
@@ -31,6 +38,7 @@ type DBOracleSuite struct {
 var _ = gc.Suite(&DBOracleSuite{
 	OracleSuite: OracleSuite{
 		OracleFunc: dbOracleFunc,
+		PreCheck:   dbCanRun,
 	},
 })
 
@@ -45,8 +53,22 @@ type MemOracleSuite struct {
 var _ = gc.Suite(&MemOracleSuite{
 	OracleSuite: OracleSuite{
 		OracleFunc: memOracleFunc,
+		PreCheck:   func(*gc.C, *mgo.Database) {},
 	},
 })
+
+func (s *DBOracleSuite) TestConfirmOutSupported(c *gc.C) {
+	tmpname := "coll.temp"
+	coll := s.db.C("coll")
+	pipe := coll.Pipe([]bson.M{{"$match": bson.M{}}, {"$out": tmpname}})
+	err := pipe.All(&bson.D{})
+	if jujutxn.CheckMongoSupportsOut(s.db) {
+		c.Assert(err, jc.ErrorIsNil)
+	} else {
+		c.Check(err, gc.ErrorMatches, ".*Unrecognized pipeline stage name: '\\$out'")
+	}
+	s.db.C(tmpname).DropCollection()
+}
 
 func (s *OracleSuite) txnToToken(c *gc.C, id bson.ObjectId) string {
 	var noncer struct {
@@ -62,9 +84,7 @@ func (s *OracleSuite) TestKnownAndUnknownTxns(c *gc.C) {
 	// We can't put the Skip into SetUpTest because we are using a
 	// database connection, which needs to get cleaned up in TearDownTest
 	// and if you Skip in a SetUpTest it skips running the TearDownTest.
-	if !jujutxn.CheckMongoSupportsOut(s.db) {
-		c.Skip("mongo does not support $out in aggregation pipelines")
-	}
+	s.PreCheck(c, s.db)
 	completedTxnId := s.runTxn(c, txn.Op{
 		C:      "coll",
 		Id:     0,
@@ -94,9 +114,7 @@ func (s *OracleSuite) TestKnownAndUnknownTxns(c *gc.C) {
 }
 
 func (s *OracleSuite) TestRemovedTxns(c *gc.C) {
-	if !jujutxn.CheckMongoSupportsOut(s.db) {
-		c.Skip("mongo does not support $out in aggregation pipelines")
-	}
+	s.PreCheck(c, s.db)
 	txnId1 := s.runTxn(c, txn.Op{
 		C:      "coll",
 		Id:     0,
@@ -129,9 +147,7 @@ func (s *OracleSuite) TestRemovedTxns(c *gc.C) {
 }
 
 func (s *OracleSuite) TestIterTxns(c *gc.C) {
-	if !jujutxn.CheckMongoSupportsOut(s.db) {
-		c.Skip("mongo does not support $out in aggregation pipelines")
-	}
+	s.PreCheck(c, s.db)
 	txnId1 := s.runTxn(c, txn.Op{
 		C:      "coll",
 		Id:     0,
