@@ -122,8 +122,7 @@ func checkMongoSupportsOut(db *mgo.Database) bool {
 	return true
 }
 
-
-func getOracle(db *mgo.Database, txns *mgo.Collection, txnsCount int, maxMemoryTxns int) Oracle {
+func getOracle(db *mgo.Database, txns *mgo.Collection, txnsCount int, maxMemoryTxns int) (Oracle, func(), error) {
 	if txnsCount < maxMemoryTxns {
 		return NewMemOracle(txns)
 	}
@@ -193,8 +192,7 @@ func CleanAndPrune(db *mgo.Database, txns *mgo.Collection, txnsCountHint int) er
 		}
 		txnsCountHint = txnsCount
 	}
-	oracle := getOracle(db, txns, txnsCountHint, maxMemoryTokens)
-	cleanup, err := oracle.Prepare()
+	oracle, cleanup, err := getOracle(db, txns, txnsCountHint, maxMemoryTokens)
 	defer cleanup()
 	if err != nil {
 		return err

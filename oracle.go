@@ -11,17 +11,6 @@ import (
 	"gopkg.in/mgo.v2/bson"
 )
 
-// DBOracle uses a temporary table on disk to track what transactions are
-// considered completed and purgeable.
-type DBOracle struct {
-	db              *mgo.Database
-	txns            *mgo.Collection
-	working         *mgo.Collection
-	checkedTokens   uint64
-	completedTokens uint64
-	foundTxns       uint64
-}
-
 // OracleIterator is used to walk over the remaining transactions.
 // See the mgo.Iter as a similar iteration mechanism. Standard use is to do:
 // iter := oracle.IterTxns()
@@ -40,11 +29,6 @@ type OracleIterator interface {
 // Oracle is the general interface that is used to track what transactions
 // are considered completed, and can be pruned.
 type Oracle interface {
-	// Prepare is called to set up any cache that the Oracle is going to
-	// be using. It returns a Cleanup function that callers are
-	// responsible for the lifetime.
-	Prepare() (cleanup func(), err error)
-
 	// Count returns the number of transactions that we are working with
 	Count() int
 
@@ -64,18 +48,33 @@ type Oracle interface {
 
 // NewDBOracle uses a database collection to manage the queue of remaining
 // transactions.
-func NewDBOracle(db *mgo.Database, txns *mgo.Collection) *DBOracle {
-	return &DBOracle{
+// The caller is responsible to call the returned cleanup() function, to ensure
+// that any resources are freed.
+func NewDBOracle(db *mgo.Database, txns *mgo.Collection) (*DBOracle, func(), error) {
+	oracle := &DBOracle{
 		db:   db,
 		txns: txns,
 	}
+	cleanup, err := oracle.prepare()
+	return oracle, cleanup, err
 }
 
 var _ Oracle = (*DBOracle)(nil)
 
 func noopCleanup() {}
 
-func (o *DBOracle) Prepare() (func(), error) {
+// DBOracle uses a temporary table on disk to track what transactions are
+// considered completed and purgeable.
+type DBOracle struct {
+	db              *mgo.Database
+	txns            *mgo.Collection
+	working         *mgo.Collection
+	checkedTokens   uint64
+	completedTokens uint64
+	foundTxns       uint64
+}
+
+func (o *DBOracle) prepare() (func(), error) {
 	if o.working != nil {
 		return noopCleanup, fmt.Errorf("Prepare called twice")
 	}
@@ -101,9 +100,6 @@ func (o *DBOracle) Prepare() (func(), error) {
 }
 
 func (o *DBOracle) Count() int {
-	if o.working == nil {
-		return -1
-	}
 	count, err := o.working.Count()
 	if err != nil {
 		return -1
@@ -219,17 +215,19 @@ type MemOracle struct {
 
 // NewMemOracle uses an in-memory map to manage the queue of  remaining
 // transactions.
-func NewMemOracle(txns *mgo.Collection) *MemOracle {
-	return &MemOracle{
+func NewMemOracle(txns *mgo.Collection) (*MemOracle, func(), error) {
+	oracle := &MemOracle{
 		txns: txns,
 	}
+	err := oracle.prepare()
+	return oracle, noopCleanup, err
 }
 
 var _ Oracle = (*MemOracle)(nil)
 
-func (o *MemOracle) Prepare() (func(), error) {
+func (o *MemOracle) prepare() error {
 	if o.completed != nil {
-		return noopCleanup, fmt.Errorf("Prepare called twice")
+		return fmt.Errorf("Prepare called twice")
 	}
 	// Load the ids of all completed and aborted txns into a separate
 	// temporary collection.
@@ -250,23 +248,10 @@ func (o *MemOracle) Prepare() (func(), error) {
 		completed[txnId.Id] = true
 	}
 	if err := iter.Close(); err != nil {
-		return noopCleanup, err
+		return err
 	}
 	o.completed = completed
-	return o.cleanup, nil
-}
-
-func (o *MemOracle) Count() int {
-	if o.completed != nil {
-		return len(o.completed)
-	}
-	return -1
-}
-
-func (o *MemOracle) cleanup() {
-	if o.completed != nil {
-		o.completed = nil
-	}
+	return nil
 }
 
 // CompletedTokens looks at the list of tokens and finds what referenced txns
@@ -333,4 +318,8 @@ func (o *MemOracle) IterTxns() (OracleIterator, error) {
 	}
 	sort.Sort(sortedTxnIds(all))
 	return &memIterator{txnIds: all}, nil
+}
+
+func (o *MemOracle) Count() int {
+	return len(o.completed)
 }

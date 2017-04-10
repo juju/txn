@@ -16,10 +16,10 @@ import (
 // OracleSuite will be run against all oracle implementations.
 type OracleSuite struct {
 	TxnSuite
-	OracleFunc func(*mgo.Database, *mgo.Collection) jujutxn.Oracle
+	OracleFunc func(*mgo.Database, *mgo.Collection) (jujutxn.Oracle, func(), error)
 }
 
-func dbOracleFunc(db *mgo.Database, c *mgo.Collection) jujutxn.Oracle {
+func dbOracleFunc(db *mgo.Database, c *mgo.Collection) (jujutxn.Oracle, func(), error) {
 	return jujutxn.NewDBOracle(db, c)
 }
 
@@ -29,12 +29,12 @@ type DBOracleSuite struct {
 }
 
 var _ = gc.Suite(&DBOracleSuite{
-	OracleSuite:OracleSuite{
+	OracleSuite: OracleSuite{
 		OracleFunc: dbOracleFunc,
 	},
 })
 
-func memOracleFunc(db *mgo.Database, c *mgo.Collection) jujutxn.Oracle {
+func memOracleFunc(db *mgo.Database, c *mgo.Collection) (jujutxn.Oracle, func(), error) {
 	return jujutxn.NewMemOracle(c)
 }
 
@@ -43,7 +43,7 @@ type MemOracleSuite struct {
 }
 
 var _ = gc.Suite(&MemOracleSuite{
-	OracleSuite:OracleSuite{
+	OracleSuite: OracleSuite{
 		OracleFunc: memOracleFunc,
 	},
 })
@@ -66,19 +66,18 @@ func (s *OracleSuite) TestKnownAndUnknownTxns(c *gc.C) {
 		c.Skip("mongo does not support $out in aggregation pipelines")
 	}
 	completedTxnId := s.runTxn(c, txn.Op{
-		C: "coll",
-		Id: 0,
+		C:      "coll",
+		Id:     0,
 		Insert: bson.M{},
 	})
 	pendingTxnId := s.runInterruptedTxn(c, txn.Op{
-		C: "coll",
-		Id: 0,
+		C:      "coll",
+		Id:     0,
 		Update: bson.M{},
 	})
-	oracle := s.OracleFunc(s.db, s.txns)
-	c.Assert(oracle, gc.NotNil)
-	cleanup, err := oracle.Prepare()
+	oracle, cleanup, err := s.OracleFunc(s.db, s.txns)
 	defer cleanup()
+	c.Assert(oracle, gc.NotNil)
 	c.Assert(err, jc.ErrorIsNil)
 	// One is the real one, one is a flusher that raced and failed
 	completedToken1 := s.txnToToken(c, completedTxnId)
@@ -99,19 +98,18 @@ func (s *OracleSuite) TestRemovedTxns(c *gc.C) {
 		c.Skip("mongo does not support $out in aggregation pipelines")
 	}
 	txnId1 := s.runTxn(c, txn.Op{
-		C: "coll",
-		Id: 0,
+		C:      "coll",
+		Id:     0,
 		Insert: bson.M{},
 	})
 	txnId2 := s.runTxn(c, txn.Op{
-		C: "coll",
-		Id: 1,
+		C:      "coll",
+		Id:     1,
 		Insert: bson.M{},
 	})
-	oracle := s.OracleFunc(s.db, s.txns)
-	c.Assert(oracle, gc.NotNil)
-	cleanup, err := oracle.Prepare()
+	oracle, cleanup, err := s.OracleFunc(s.db, s.txns)
 	defer cleanup()
+	c.Assert(oracle, gc.NotNil)
 	c.Assert(err, jc.ErrorIsNil)
 	token1 := s.txnToToken(c, txnId1)
 	token2 := s.txnToToken(c, txnId2)
@@ -135,24 +133,23 @@ func (s *OracleSuite) TestIterTxns(c *gc.C) {
 		c.Skip("mongo does not support $out in aggregation pipelines")
 	}
 	txnId1 := s.runTxn(c, txn.Op{
-		C: "coll",
-		Id: 0,
+		C:      "coll",
+		Id:     0,
 		Insert: bson.M{},
 	})
 	txnId2 := s.runTxn(c, txn.Op{
-		C: "coll",
-		Id: 1,
+		C:      "coll",
+		Id:     1,
 		Insert: bson.M{},
 	})
 	txnId3 := s.runTxn(c, txn.Op{
-		C: "coll",
-		Id: 2,
+		C:      "coll",
+		Id:     2,
 		Insert: bson.M{},
 	})
-	oracle := s.OracleFunc(s.db, s.txns)
-	c.Assert(oracle, gc.NotNil)
-	cleanup, err := oracle.Prepare()
+	oracle, cleanup, err := s.OracleFunc(s.db, s.txns)
 	defer cleanup()
+	c.Assert(oracle, gc.NotNil)
 	c.Assert(err, jc.ErrorIsNil)
 	c.Check(oracle.Count(), gc.Equals, 3)
 	oracle.RemoveTxns([]bson.ObjectId{txnId2})
@@ -167,10 +164,4 @@ func (s *OracleSuite) TestIterTxns(c *gc.C) {
 	c.Assert(err, gc.Equals, jujutxn.EOF)
 	// Do we care about the order here?
 	c.Check(all, jc.DeepEquals, []bson.ObjectId{txnId1, txnId3})
-}
-
-func (s *OracleSuite) TestCount(c *gc.C) {
-	oracle := s.OracleFunc(s.db, s.txns)
-	// Before calling Prepare, Count is invalid
-	c.Check(oracle.Count(), gc.Equals, -1)
 }

@@ -122,4 +122,3 @@ func (s *TxnSuite) getCollCount(c *gc.C, collName string) int {
 	c.Assert(err, jc.ErrorIsNil)
 	return n
 }
-
