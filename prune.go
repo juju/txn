@@ -125,12 +125,14 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 	}
 
 	required, rationale := shouldPrune(lastTxnsCount, txnsCount, pruneOpts)
-	logger.Infof("txns after last prune: %d, txns now: %d, pruning required: %v %s",
-		lastTxnsCount, txnsCount, required, rationale)
 
 	if !required {
+		logger.Infof("txns after last prune: %d, txns now: %d, not pruning: %s",
+			lastTxnsCount, txnsCount, rationale)
 		return nil
 	}
+	logger.Infof("txns after last prune: %d, txns now: %d, pruning: %s",
+		lastTxnsCount, txnsCount, rationale)
 	started := time.Now()
 
 	stashDocsBefore, err := txnsStash.Count()
