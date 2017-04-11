@@ -7,10 +7,8 @@ import (
 	"time"
 
 	"github.com/juju/loggo"
-	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	"gopkg.in/mgo.v2/txn"
 
@@ -18,40 +16,10 @@ import (
 )
 
 type PruneSuite struct {
-	testing.IsolationSuite
-	testing.MgoSuite
-	db     *mgo.Database
-	txns   *mgo.Collection
-	runner *txn.Runner
+	TxnSuite
 }
 
 var _ = gc.Suite(&PruneSuite{})
-
-func (s *PruneSuite) SetUpSuite(c *gc.C) {
-	s.IsolationSuite.SetUpSuite(c)
-	s.MgoSuite.SetUpSuite(c)
-}
-
-func (s *PruneSuite) TearDownSuite(c *gc.C) {
-	txn.SetChaos(txn.Chaos{})
-	s.MgoSuite.TearDownSuite(c)
-	s.IsolationSuite.TearDownSuite(c)
-}
-
-func (s *PruneSuite) SetUpTest(c *gc.C) {
-	s.IsolationSuite.SetUpTest(c)
-	s.MgoSuite.SetUpTest(c)
-	txn.SetChaos(txn.Chaos{})
-
-	s.db = s.Session.DB("prune-test")
-	s.txns = s.db.C("txns")
-	s.runner = txn.NewRunner(s.txns)
-}
-
-func (s *PruneSuite) TearDownTest(c *gc.C) {
-	s.MgoSuite.TearDownTest(c)
-	s.IsolationSuite.TearDownTest(c)
-}
 
 func (s *PruneSuite) maybePrune(c *gc.C, pruneFactor float32) {
 	r := jujutxn.NewRunner(jujutxn.RunnerParams{
@@ -498,80 +466,6 @@ func (s *PruneSuite) makeTxnsForNewDoc(c *gc.C, count int) {
 			Update: bson.M{},
 		})
 	}
-}
-
-func (s *PruneSuite) runTxn(c *gc.C, ops ...txn.Op) bson.ObjectId {
-	txnId := bson.NewObjectId()
-	err := s.runner.Run(ops, txnId, nil)
-	c.Assert(err, jc.ErrorIsNil)
-	return txnId
-}
-
-func (s *PruneSuite) runFailingTxn(c *gc.C, expectedErr error, ops ...txn.Op) bson.ObjectId {
-	txnId := bson.NewObjectId()
-	err := s.runner.Run(ops, txnId, nil)
-	c.Assert(err, gc.Equals, expectedErr)
-	return txnId
-}
-
-// runInterruptedTxn starts a transaction, but interrupts it just before it gets applied.
-func (s *PruneSuite) runInterruptedTxn(c *gc.C, ops ...txn.Op) bson.ObjectId {
-	txn.SetChaos(txn.Chaos{
-		KillChance: 1,
-		Breakpoint: "set-applying",
-	})
-	txnId := s.runFailingTxn(c, txn.ErrChaos, ops...)
-	txn.SetChaos(txn.Chaos{})
-	return txnId
-}
-
-func (s *PruneSuite) assertTxns(c *gc.C, expectedIds ...bson.ObjectId) {
-	var actualIds []bson.ObjectId
-	var txnDoc struct {
-		Id bson.ObjectId `bson:"_id"`
-	}
-	iter := s.txns.Find(nil).Select(bson.M{"_id": 1}).Iter()
-	for iter.Next(&txnDoc) {
-		actualIds = append(actualIds, txnDoc.Id)
-	}
-	c.Assert(actualIds, jc.SameContents, expectedIds)
-}
-
-func (s *PruneSuite) assertDocQueue(c *gc.C, collection string, id interface{}, expectedIds ...bson.ObjectId) {
-	coll := s.db.C(collection)
-	var queueDoc struct {
-		Queue []string `bson:"txn-queue"`
-	}
-	err := coll.FindId(id).One(&queueDoc)
-	c.Assert(err, jc.ErrorIsNil)
-	txnIdsHex := make([]string, len(queueDoc.Queue))
-	for i, token := range queueDoc.Queue {
-		// strip of the _nonce
-		txnIdsHex[i] = token[:24]
-	}
-	expectedHex := make([]string, len(expectedIds))
-	for i, id := range expectedIds {
-		expectedHex[i] = id.Hex()
-	}
-	c.Check(txnIdsHex, gc.DeepEquals, expectedHex)
-}
-
-func (s *PruneSuite) assertStashDocQueue(c *gc.C, collection string, id interface{}, expectedIds ...bson.ObjectId) {
-	// Assert a pending/removed document that is currently in the stash.
-	// We identify it by the collection it would have been in.
-	stashId := bson.D{{"c", collection}, {"id", id}}
-	s.assertDocQueue(c, "txns.stash", stashId, expectedIds...)
-}
-
-func (s *PruneSuite) assertCollCount(c *gc.C, collName string, expectedCount int) {
-	count := s.getCollCount(c, collName)
-	c.Assert(count, gc.Equals, expectedCount)
-}
-
-func (s *PruneSuite) getCollCount(c *gc.C, collName string) int {
-	n, err := s.db.C(collName).Count()
-	c.Assert(err, jc.ErrorIsNil)
-	return n
 }
 
 func (s *PruneSuite) setLastPruneCount(c *gc.C, count int) {
