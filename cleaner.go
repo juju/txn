@@ -354,8 +354,8 @@ func (cleaner *collectionCleaner) Cleanup() error {
 	return nil
 }
 
-// CleanupStash goes through the txns.stash and removes documents that are no longer needed.
-func CleanupStash(db *mgo.Database, oracle Oracle, txnsStash *mgo.Collection) error {
+// cleanupStash goes through the txns.stash and removes documents that are no longer needed.
+func cleanupStash(db *mgo.Database, oracle Oracle, txnsStash *mgo.Collection, stats *CleanupStats) error {
 	cleaner := NewStashCleaner(CollectionConfig{
 		Oracle:         oracle,
 		Source:         txnsStash,
@@ -363,5 +363,12 @@ func CleanupStash(db *mgo.Database, oracle Oracle, txnsStash *mgo.Collection) er
 		MaxRemoveQueue: maxMemoryTokens,
 		LogInterval:    logInterval,
 	})
-	return cleaner.Cleanup()
+	err := cleaner.Cleanup()
+	if stats != nil {
+		stats.CollectionsInspected += 1
+		stats.DocsInspected += cleaner.stats.DocCount
+		stats.StashDocumentsRemoved += cleaner.stats.RemovedCount
+		stats.DocsCleaned += cleaner.stats.UpdatedDocCount
+	}
+	return err
 }
