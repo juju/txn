@@ -62,12 +62,15 @@ func main() {
 	db := session.DB(*dbName)
 	txnsC := db.C(*txnsName)
 
-	err = txn.CleanAndPrune(db, txnsC, 0)
+	startTime := time.Now()
+	stats, err := txn.CleanAndPrune(db, txnsC, 0)
 	if err != nil {
 		log.Fatalf("failed to clean and prune txns: %v", err)
 	}
 
-	log.Println("clean and prune complete")
+	log.Println("clean and prune complete after", time.Since(startTime))
+	log.Println(stats.DocsCleaned, "docs cleaned,", stats.TransactionsRemoved, "txns removed,",
+			    stats.StashDocumentsRemoved, "txns.stash docs removed")
 }
 
 func dialInsecureTLS(addr *mgo.ServerAddr) (net.Conn, error) {
