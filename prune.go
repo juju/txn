@@ -351,7 +351,12 @@ func PruneTxns(db *mgo.Database, oracle Oracle, txns *mgo.Collection, stats *Cle
 
 	// Remove the no-longer-referenced transactions from the txns collection.
 	t = newSimpleTimer(logInterval)
-	remover := newBulkRemover(txns)
+	var remover Remover
+	if checkMongoSupportsOut(db) {
+		remover = newBulkRemover(txns)
+	} else {
+		remover = newBatchRemover(txns)
+	}
 	iter, err := oracle.IterTxns()
 	if err != nil {
 		return err
@@ -359,24 +364,24 @@ func PruneTxns(db *mgo.Database, oracle Oracle, txns *mgo.Collection, stats *Cle
 	var loopErr error
 	var txnId bson.ObjectId
 	for txnId, loopErr = iter.Next(); loopErr == nil; txnId, loopErr = iter.Next() {
-		if err := remover.remove(txnId); err != nil {
+		if err := remover.Remove(txnId); err != nil {
 			return fmt.Errorf("removing txns: %v", err)
 		}
 		if t.isAfter() {
-			logger.Debugf("%d completed txns pruned so far", remover.removed)
+			logger.Debugf("%d completed txns pruned so far", remover.Removed())
 		}
 	}
-	if err := remover.flush(); err != nil {
+	if err := remover.Flush(); err != nil {
 		return fmt.Errorf("removing txns: %v", err)
 	}
 	if loopErr != EOF {
 		return loopErr
 	}
 	if stats != nil {
-		stats.TransactionsRemoved += remover.removed
+		stats.TransactionsRemoved += remover.Removed()
 	}
 
-	logger.Debugf("pruning completed: removed %d txns", remover.removed)
+	logger.Debugf("pruning completed: removed %d txns", remover.Removed())
 	return nil
 }
 
@@ -444,6 +449,55 @@ func txnTokenToId(token string) bson.ObjectId {
 	return bson.ObjectIdHex(token[:24])
 }
 
+func newBatchRemover(coll *mgo.Collection) *batchRemover {
+	return &batchRemover{
+		coll: coll,
+	}
+}
+
+type Remover interface {
+	Remove(id interface{}) error
+	Flush() error
+	Removed() int
+}
+
+type batchRemover struct {
+	coll      *mgo.Collection
+	queue	 []interface{}
+	removed int
+}
+
+var _ Remover = (*batchRemover)(nil)
+
+func (r *batchRemover) Remove(id interface{}) error {
+	r.queue = append(r.queue, id)
+	if len(r.queue) >= maxBulkOps {
+		return r.Flush()
+	}
+	return nil
+}
+
+func (r *batchRemover) Flush() error {
+	if len(r.queue) < 1 {
+		return nil // Nothing to do
+	}
+	filter := bson.M{"_id": bson.M{"$in": r.queue}}
+	switch result, err := r.coll.RemoveAll(filter); err {
+	case nil, mgo.ErrNotFound:
+		// It's OK for txns to no longer exist. Another process
+		// may have concurrently pruned them.
+		r.removed += result.Removed
+		r.queue = r.queue[:0]
+		return nil
+	default:
+		return err
+	}
+}
+
+func (r *batchRemover) Removed() int {
+	return r.removed
+}
+
 func newBulkRemover(coll *mgo.Collection) *bulkRemover {
 	r := &bulkRemover{coll: coll}
 	r.newChunk()
@@ -457,22 +511,24 @@ type bulkRemover struct {
 	removed   int
 }
 
+var _ Remover = (*bulkRemover)(nil)
+
 func (r *bulkRemover) newChunk() {
 	r.chunk = r.coll.Bulk()
 	r.chunk.Unordered()
 	r.chunkSize = 0
 }
 
-func (r *bulkRemover) remove(id interface{}) error {
+func (r *bulkRemover) Remove(id interface{}) error {
 	r.chunk.Remove(bson.D{{"_id", id}})
 	r.chunkSize++
 	if r.chunkSize >= maxBulkOps {
-		return r.flush()
+		return r.Flush()
 	}
 	return nil
 }
 
-func (r *bulkRemover) flush() error {
+func (r *bulkRemover) Flush() error {
 	if r.chunkSize < 1 {
 		return nil // Nothing to do
 	}
@@ -486,6 +542,10 @@ func (r *bulkRemover) flush() error {
 	default:
 		return err
 	}
+}
+
+func (r *bulkRemover) Removed() int {
+	return r.removed
 }
 
 func newSimpleTimer(interval time.Duration) *simpleTimer {

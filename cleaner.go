@@ -266,20 +266,20 @@ func (cleaner *collectionCleaner) flushRemoveQueue() error {
 	if len(cleaner.docIdsToRemove) == 0 {
 		return nil
 	}
-	remover := newBulkRemover(cleaner.config.Source)
+	remover := newBatchRemover(cleaner.config.Source)
 	for _, docId := range cleaner.docIdsToRemove {
-		if err := remover.remove(docId); err != nil {
+		if err := remover.Remove(docId); err != nil {
 			return fmt.Errorf("failed while removing document %v from %q",
 				docId, cleaner.config.Source.Name)
 		}
 	}
-	if err := remover.flush(); err != nil {
+	if err := remover.Flush(); err != nil {
 		return fmt.Errorf("failed while removing documents from %q",
 			cleaner.config.Source.Name)
 	}
-	cleaner.stats.RemovedCount += remover.removed
+	cleaner.stats.RemovedCount += remover.Removed()
 	logger.Debugf("flushing %d documents removed %d (%d total)",
-		len(cleaner.docIdsToRemove), remover.removed, cleaner.stats.RemovedCount)
+		len(cleaner.docIdsToRemove), remover.Removed(), cleaner.stats.RemovedCount)
 	cleaner.docIdsToRemove = cleaner.docIdsToRemove[:0]
 	return nil
 }
