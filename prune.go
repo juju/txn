@@ -134,7 +134,6 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 	}
 
 	stats, err := CleanAndPrune(CleanAndPruneArgs{
-		DB:        db,
 		Txns:      txns,
 		TxnsCount: txnsCount,
 	})
@@ -159,15 +158,11 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 
 // CleanAndPruneArgs specifies the parameters required by CleanAndPrune.
 type CleanAndPruneArgs struct {
-	DB        *mgo.Database
 	Txns      *mgo.Collection
 	TxnsCount int
 }
 
 func (args *CleanAndPruneArgs) validate() error {
-	if args.DB == nil {
-		return errors.New("nil DB not valid")
-	}
 	if args.Txns == nil {
 		return errors.New("nil Txns not valid")
 	}
@@ -203,6 +198,8 @@ func CleanAndPrune(args CleanAndPruneArgs) (CleanupStats, error) {
 		return stats, err
 	}
 
+	db := args.Txns.Database
+
 	if args.TxnsCount <= 0 {
 		txnsCount, err := args.Txns.Count()
 		if err != nil {
@@ -217,17 +214,17 @@ func CleanAndPrune(args CleanAndPruneArgs) (CleanupStats, error) {
 		return stats, err
 	}
 	txnsStashName := args.Txns.Name + ".stash"
-	txnsStash := args.DB.C(txnsStashName)
+	txnsStash := db.C(txnsStashName)
 
-	if err := cleanupStash(args.DB, oracle, txnsStash, &stats); err != nil {
+	if err := cleanupStash(oracle, txnsStash, &stats); err != nil { // XXX
 		return stats, err
 	}
 
-	if err := cleanupAllCollections(args.DB, oracle, args.Txns.Name, &stats); err != nil {
+	if err := cleanupAllCollections(db, oracle, args.Txns.Name, &stats); err != nil {
 		return stats, err
 	}
 
-	if err := PruneTxns(args.DB, oracle, args.Txns, &stats); err != nil {
+	if err := PruneTxns(oracle, args.Txns, &stats); err != nil {
 		return stats, err
 	}
 	return stats, nil
@@ -238,7 +235,7 @@ func getOracle(args CleanAndPruneArgs, maxMemoryTxns int) (Oracle, func(), error
 	if args.TxnsCount < maxMemoryTxns {
 		return NewMemOracle(args.Txns)
 	}
-	return NewDBOracle(args.DB, args.Txns)
+	return NewDBOracle(args.Txns)
 }
 
 // getPruneLastTxnsCount will return how many documents were in 'txns' the
@@ -314,10 +311,11 @@ func txnsPruneC(txnsName string) string {
 // TODO(mjs) - this knows way too much about mgo/txn's internals and
 // with a bit of luck something like this will one day be part of
 // mgo/txn.
-func PruneTxns(db *mgo.Database, oracle Oracle, txns *mgo.Collection, stats *CleanupStats) error {
+func PruneTxns(oracle Oracle, txns *mgo.Collection, stats *CleanupStats) error {
 	count := oracle.Count()
 	logger.Debugf("%d completed txns found", count)
 
+	db := txns.Database
 	collNames, err := db.CollectionNames()
 	if err != nil {
 		return fmt.Errorf("reading collection names: %v", err)

@@ -63,10 +63,7 @@ func main() {
 	txnsC := db.C(*txnsName)
 
 	startTime := time.Now()
-	stats, err := txn.CleanAndPrune(txn.CleanAndPruneArgs{
-		DB:   db,
-		Txns: txnsC,
-	})
+	stats, err := txn.CleanAndPrune(txn.CleanAndPruneArgs{Txns: txnsC})
 	if err != nil {
 		log.Fatalf("failed to clean and prune txns: %v", err)
 	}
