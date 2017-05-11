@@ -355,7 +355,7 @@ func (cleaner *collectionCleaner) Cleanup() error {
 }
 
 // cleanupStash goes through the txns.stash and removes documents that are no longer needed.
-func cleanupStash(oracle Oracle, txnsStash *mgo.Collection, stats *CleanupStats) error {
+func cleanupStash(oracle Oracle, txnsStash *mgo.Collection, stats *PruneStats) error {
 	cleaner := NewStashCleaner(CollectionConfig{
 		Oracle:         oracle,
 		Source:         txnsStash,
