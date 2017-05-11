@@ -39,7 +39,7 @@ type Oracle interface {
 
 	// RemoveTxns can be used to flag that a given transaction should not
 	// be considered part of the valid set.
-	RemoveTxns(txnIds []bson.ObjectId) error
+	RemoveTxns(txnIds []bson.ObjectId) (int, error)
 
 	// IterTxns lets you iterate over all of the transactions that have
 	// not been removed.
@@ -249,12 +249,15 @@ func (o *DBOracle) CompletedTokens(tokens []string) (map[string]bool, error) {
 
 // RemoveTxns can be used to flag that a given transaction should not
 // be considered part of the valid set.
-func (o *DBOracle) RemoveTxns(txnIds []bson.ObjectId) error {
-	_, err := o.working.RemoveAll(bson.M{"_id": bson.M{"$in": txnIds}})
+func (o *DBOracle) RemoveTxns(txnIds []bson.ObjectId) (int, error) {
+	info, err := o.working.RemoveAll(bson.M{"_id": bson.M{"$in": txnIds}})
 	if err != nil {
-		return fmt.Errorf("error removing transaction ids: %v", err)
+		return 0, fmt.Errorf("error removing transaction ids: %v", err)
 	}
-	return nil
+	if info != nil {
+		return info.Removed, nil
+	}
+	return 0, nil
 }
 
 type dbIterWrapper struct {
@@ -373,11 +376,15 @@ func (o *MemOracle) CompletedTokens(tokens []string) (map[string]bool, error) {
 
 // RemoveTxns can be used to flag that a given transaction should not
 // be considered part of the valid set.
-func (o *MemOracle) RemoveTxns(txnIds []bson.ObjectId) error {
+func (o *MemOracle) RemoveTxns(txnIds []bson.ObjectId) (int, error) {
+	removedCount := 0
 	for _, txnId := range txnIds {
+		if _, ok := o.completed[txnId]; ok {
+			removedCount++
+		}
 		delete(o.completed, txnId)
 	}
-	return nil
+	return removedCount, nil
 }
 
 type memIterator struct {

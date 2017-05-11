@@ -306,6 +306,7 @@ func PruneTxns(db *mgo.Database, oracle Oracle, txns *mgo.Collection, stats *Cle
 	// removal of transactions created during the pruning process.
 	t := newSimpleTimer(logInterval)
 	toRemove := make([]bson.ObjectId, 0, maxBulkOps)
+	referencedCount := 0
 	removedCount := 0
 	for _, collName := range collNames {
 		logger.Tracef("checking %s for txn references", collName)
@@ -325,12 +326,14 @@ func PruneTxns(db *mgo.Database, oracle Oracle, txns *mgo.Collection, stats *Cle
 				txnId := txnTokenToId(token)
 				toRemove = append(toRemove, txnId)
 				if t.isAfter() {
-					logger.Debugf("%d referenced txns found so far", removedCount)
+					logger.Debugf("%d referenced txns found so far", referencedCount)
 				}
 				if len(toRemove) >= maxBulkOps {
-					removedCount += len(toRemove)
-					if err := oracle.RemoveTxns(toRemove); err != nil {
+					referencedCount += len(toRemove)
+					if count, err := oracle.RemoveTxns(toRemove); err != nil {
 						return fmt.Errorf("removing completed txns: %v", err)
+					} else {
+						removedCount += count
 					}
 					toRemove = toRemove[:0]
 				}
@@ -341,13 +344,15 @@ func PruneTxns(db *mgo.Database, oracle Oracle, txns *mgo.Collection, stats *Cle
 		}
 	}
 	if len(toRemove) > 0 {
-		removedCount += len(toRemove)
-		if err := oracle.RemoveTxns(toRemove); err != nil {
+		referencedCount += len(toRemove)
+		if count, err := oracle.RemoveTxns(toRemove); err != nil {
 			return fmt.Errorf("removing completed txns: %v", err)
+		} else {
+			removedCount += count
 		}
 		toRemove = toRemove[:0]
 	}
-	logger.Debugf("%d txns are still referenced and will be kept", removedCount)
+	logger.Debugf("%d txns are still referenced and will be kept (%d we would have removed)", referencedCount, removedCount)
 
 	// Remove the no-longer-referenced transactions from the txns collection.
 	t = newSimpleTimer(logInterval)

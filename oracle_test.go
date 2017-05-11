@@ -81,8 +81,9 @@ func (s *OracleSuite) TestRemovedTxns(c *gc.C) {
 		token1: true,
 		token2: true,
 	})
-	err = oracle.RemoveTxns([]bson.ObjectId{txnId1})
+	count, err := oracle.RemoveTxns([]bson.ObjectId{txnId1})
 	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 1)
 	completed, err = oracle.CompletedTokens([]string{token1, token2})
 	c.Assert(err, jc.ErrorIsNil)
 	c.Check(completed, jc.DeepEquals, map[string]bool{
@@ -111,7 +112,14 @@ func (s *OracleSuite) TestIterTxns(c *gc.C) {
 	c.Assert(oracle, gc.NotNil)
 	c.Assert(err, jc.ErrorIsNil)
 	c.Check(oracle.Count(), gc.Equals, 3)
-	oracle.RemoveTxns([]bson.ObjectId{txnId2})
+	count, err := oracle.RemoveTxns([]bson.ObjectId{txnId2})
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 1)
+	c.Check(oracle.Count(), gc.Equals, 2)
+	// Doesn't hurt to remove one already removed
+	count, err = oracle.RemoveTxns([]bson.ObjectId{txnId2})
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 0)
 	c.Check(oracle.Count(), gc.Equals, 2)
 	all := make([]bson.ObjectId, 0)
 	iter, err := oracle.IterTxns()
