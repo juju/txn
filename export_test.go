@@ -22,9 +22,9 @@ var CheckMongoSupportsOut = checkMongoSupportsOut
 // NewDBOracleNoOut is only used for testing. It forces the DBOracle to not ask
 // mongo to populate the working set in the aggregation pipeline, which is our
 // compatibility code for older mongo versions.
-func NewDBOracleNoOut(db *mgo.Database, txns *mgo.Collection) (*DBOracle, func(), error) {
+func NewDBOracleNoOut(txns *mgo.Collection) (*DBOracle, func(), error) {
 	oracle := &DBOracle{
-		db:            db,
+		db:            txns.Database,
 		txns:          txns,
 		usingMongoOut: false,
 	}

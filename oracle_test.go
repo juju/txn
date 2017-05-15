@@ -16,7 +16,7 @@ import (
 // OracleSuite will be run against all oracle implementations.
 type OracleSuite struct {
 	TxnSuite
-	OracleFunc func(*mgo.Database, *mgo.Collection) (jujutxn.Oracle, func(), error)
+	OracleFunc func(*mgo.Collection) (jujutxn.Oracle, func(), error)
 }
 
 func (s *OracleSuite) txnToToken(c *gc.C, id bson.ObjectId) string {
@@ -40,7 +40,7 @@ func (s *OracleSuite) TestKnownAndUnknownTxns(c *gc.C) {
 		Id:     0,
 		Update: bson.M{},
 	})
-	oracle, cleanup, err := s.OracleFunc(s.db, s.txns)
+	oracle, cleanup, err := s.OracleFunc(s.txns)
 	defer cleanup()
 	c.Assert(oracle, gc.NotNil)
 	c.Assert(err, jc.ErrorIsNil)
@@ -69,7 +69,7 @@ func (s *OracleSuite) TestRemovedTxns(c *gc.C) {
 		Id:     1,
 		Insert: bson.M{},
 	})
-	oracle, cleanup, err := s.OracleFunc(s.db, s.txns)
+	oracle, cleanup, err := s.OracleFunc(s.txns)
 	defer cleanup()
 	c.Assert(oracle, gc.NotNil)
 	c.Assert(err, jc.ErrorIsNil)
@@ -106,7 +106,7 @@ func (s *OracleSuite) TestIterTxns(c *gc.C) {
 		Id:     2,
 		Insert: bson.M{},
 	})
-	oracle, cleanup, err := s.OracleFunc(s.db, s.txns)
+	oracle, cleanup, err := s.OracleFunc(s.txns)
 	defer cleanup()
 	c.Assert(oracle, gc.NotNil)
 	c.Assert(err, jc.ErrorIsNil)
@@ -125,8 +125,8 @@ func (s *OracleSuite) TestIterTxns(c *gc.C) {
 	c.Check(all, jc.DeepEquals, []bson.ObjectId{txnId1, txnId3})
 }
 
-func dbOracleFunc(db *mgo.Database, c *mgo.Collection) (jujutxn.Oracle, func(), error) {
-	return jujutxn.NewDBOracle(db, c)
+func dbOracleFunc(c *mgo.Collection) (jujutxn.Oracle, func(), error) {
+	return jujutxn.NewDBOracle(c)
 }
 
 // DBOracleSuite causes the test suite to run against the DBOracle implementation
@@ -157,8 +157,8 @@ type DBCompatOracleSuite struct {
 	OracleSuite
 }
 
-func dbNoOutOracleFunc(db *mgo.Database, c *mgo.Collection) (jujutxn.Oracle, func(), error) {
-	return jujutxn.NewDBOracleNoOut(db, c)
+func dbNoOutOracleFunc(c *mgo.Collection) (jujutxn.Oracle, func(), error) {
+	return jujutxn.NewDBOracleNoOut(c)
 }
 
 var _ = gc.Suite(&DBCompatOracleSuite{
@@ -167,7 +167,7 @@ var _ = gc.Suite(&DBCompatOracleSuite{
 	},
 })
 
-func memOracleFunc(db *mgo.Database, c *mgo.Collection) (jujutxn.Oracle, func(), error) {
+func memOracleFunc(c *mgo.Collection) (jujutxn.Oracle, func(), error) {
 	return jujutxn.NewMemOracle(c)
 }
 

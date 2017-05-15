@@ -69,11 +69,11 @@ func checkMongoSupportsOut(db *mgo.Database) bool {
 // transactions.
 // The caller is responsible to call the returned cleanup() function, to ensure
 // that any resources are freed.
-func NewDBOracle(db *mgo.Database, txns *mgo.Collection) (*DBOracle, func(), error) {
+func NewDBOracle(txns *mgo.Collection) (*DBOracle, func(), error) {
 	oracle := &DBOracle{
-		db:            db,
+		db:            txns.Database,
 		txns:          txns,
-		usingMongoOut: checkMongoSupportsOut(db),
+		usingMongoOut: checkMongoSupportsOut(txns.Database),
 	}
 	cleanup, err := oracle.prepare()
 	return oracle, cleanup, err
