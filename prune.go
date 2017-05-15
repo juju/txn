@@ -352,7 +352,10 @@ func PruneTxns(db *mgo.Database, oracle Oracle, txns *mgo.Collection, stats *Cle
 		}
 		toRemove = toRemove[:0]
 	}
-	logger.Debugf("%d txns are still referenced and will be kept (%d we would have removed)", referencedCount, removedCount)
+	// We don't expect 'removedCount' to be nonzero because all of them
+	// should have been handled by the Clean pass.
+	logger.Debugf("%d txns are still referenced and will be kept (%d unexpected references)",
+		referencedCount, removedCount)
 
 	// Remove the no-longer-referenced transactions from the txns collection.
 	t = newSimpleTimer(logInterval)
