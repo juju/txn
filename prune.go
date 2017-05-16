@@ -134,9 +134,9 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 	}
 
 	stats, err := CleanAndPrune(CleanAndPruneArgs{
-		Txns:       txns,
-		TxnsCount:  txnsCount,
-		NewestTime: pruneOpts.NewestTime,
+		Txns:      txns,
+		TxnsCount: txnsCount,
+		MaxTime:   pruneOpts.MaxTime,
 	})
 	completed := time.Now()
 
@@ -171,10 +171,10 @@ type CleanAndPruneArgs struct {
 	// It is optional, as we will call Txns.Count() if it is not supplied.
 	TxnsCount int
 
-	// NewestTime is a timestamp that provides a threshold of transactions
+	// MaxTime is a timestamp that provides a threshold of transactions
 	// that we will actually prune. Only transactions that were created
 	// before this threshold will be pruned.
-	NewestTime time.Time
+	MaxTime time.Time
 }
 
 func (args *CleanAndPruneArgs) validate() error {
@@ -248,9 +248,9 @@ func CleanAndPrune(args CleanAndPruneArgs) (CleanupStats, error) {
 func getOracle(args CleanAndPruneArgs, maxMemoryTxns int) (Oracle, func(), error) {
 	// If we don't have very many transactions, just use the in-memory version
 	if args.TxnsCount < maxMemoryTxns {
-		return NewMemOracle(args.Txns, args.NewestTime)
+		return NewMemOracle(args.Txns, args.MaxTime)
 	}
-	return NewDBOracle(args.Txns, args.NewestTime)
+	return NewDBOracle(args.Txns, args.MaxTime)
 }
 
 // getPruneLastTxnsCount will return how many documents were in 'txns' the

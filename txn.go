@@ -70,11 +70,11 @@ type PruneOptions struct {
 	// MaxNewTransactions since the last run.
 	MaxNewTransactions int
 
-	// NewestTime sets a threshold for 'completed' transactions. Transactions
+	// MaxTime sets a threshold for 'completed' transactions. Transactions
 	// will be considered completed only if they are both older than
-	// NewestTime and have a status of Completed or Aborted. Passing the
+	// MaxTime and have a status of Completed or Aborted. Passing the
 	// zero Time will cause us to only filter on the Status field.
-	NewestTime time.Time
+	MaxTime time.Time
 }
 
 // Runner instances applies operations to collections in a database.

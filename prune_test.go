@@ -36,7 +36,7 @@ func (s *PruneSuite) maybePruneWithTimestamp(c *gc.C, pruneFactor float32, times
 		PruneFactor:        pruneFactor,
 		MinNewTransactions: 1,
 		MaxNewTransactions: 1000,
-		NewestTime:         timestamp,
+		MaxTime:            timestamp,
 	})
 	c.Assert(err, jc.ErrorIsNil)
 }

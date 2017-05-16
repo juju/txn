@@ -71,16 +71,11 @@ func checkMongoSupportsOut(db *mgo.Database) bool {
 // timestamp. If the timestamp is empty,then only the completed status is evaluated.
 // The returned object is suitable for being passed to a $match or a Find() operation.
 func completedOldTransactionMatch(timestamp time.Time) bson.M {
-	var zeroTime = time.Time{}
-	if timestamp == zeroTime {
-		return bson.M{"s": bson.M{"$gte": taborted}}
+	match := bson.M{"s": bson.M{"$gte": taborted}}
+	if !timestamp.IsZero() {
+		match["_id"] = bson.M{"$lt": bson.NewObjectIdWithTime(timestamp)}
 	}
-	tid := bson.NewObjectIdWithTime(timestamp)
-	return bson.M{
-		"s":   bson.M{"$gte": taborted},
-		"_id": bson.M{"$lt": tid},
-	}
-
+	return match
 }
 
 // NewDBOracle uses a database collection to manage the queue of remaining
