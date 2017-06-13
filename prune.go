@@ -585,7 +585,9 @@ func (r *bulkRemover) Flush() error {
 	case nil, mgo.ErrNotFound:
 		// It's OK for txns to no longer exist. Another process
 		// may have concurrently pruned them.
-		r.removed += result.Matched
+		if result != nil {
+			r.removed += result.Matched
+		}
 		r.newChunk()
 		return nil
 	default:
