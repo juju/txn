@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/juju/errors"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 )
@@ -165,7 +166,7 @@ func (cleaner *collectionCleaner) findCompletedTokens() (map[string]bool, error)
 	cleaner.stats.CompletedTokenCount += len(result)
 	// TODO:
 	// cleaner.stats.CompletedTxnCount += len(foundIdHex)
-	return result, err
+	return result, errors.Trace(err)
 }
 
 // findPullableTokens checks to see what transaction tokens should be removed
@@ -189,7 +190,7 @@ func (cleaner *collectionCleaner) processStashDocs() error {
 	}
 	completedTokens, err := cleaner.findCompletedTokens()
 	if err != nil {
-		return fmt.Errorf("error looking up completed transactions: %v", err)
+		return errors.Annotatef(err, "error looking up completed transactions")
 	}
 	pullChunk := cleaner.config.Source.Bulk()
 	pullChunk.Unordered()
@@ -201,7 +202,7 @@ func (cleaner *collectionCleaner) processStashDocs() error {
 			if err != mgo.ErrNotFound {
 				// not found is odd, but not considered fatal,
 				// all others are
-				return fmt.Errorf("error while updating documents: %v", err)
+				return errors.Annotatef(err, "error while updating documents")
 			}
 		}
 		cleaner.stats.UpdatedDocCount += result.Matched
@@ -269,12 +270,12 @@ func (cleaner *collectionCleaner) flushRemoveQueue() error {
 	remover := newBatchRemover(cleaner.config.Source)
 	for _, docId := range cleaner.docIdsToRemove {
 		if err := remover.Remove(docId); err != nil {
-			return fmt.Errorf("failed while removing document %v from %q",
+			return errors.Annotatef(err, "failed while removing document %v from %q",
 				docId, cleaner.config.Source.Name)
 		}
 	}
 	if err := remover.Flush(); err != nil {
-		return fmt.Errorf("failed while removing documents from %q",
+		return errors.Annotatef(err, "failed while removing documents from %q",
 			cleaner.config.Source.Name)
 	}
 	cleaner.stats.RemovedCount += remover.Removed()
@@ -332,8 +333,8 @@ func (cleaner *collectionCleaner) Cleanup() error {
 			return err
 		}
 		if err := iter.Close(); err != nil {
-			return fmt.Errorf("error while iterating %q: %v",
-				cleaner.config.Source.Name, err)
+			return errors.Annotatef(err, "error while iterating %q",
+				cleaner.config.Source.Name)
 		}
 		if !removedWhileIterating {
 			break

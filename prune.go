@@ -4,11 +4,10 @@
 package txn
 
 import (
-	"errors"
-	"fmt"
 	"strings"
 	"time"
 
+	"github.com/juju/errors"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 )
@@ -110,11 +109,11 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 
 	txnsCount, err := txns.Count()
 	if err != nil {
-		return fmt.Errorf("failed to retrieve starting txns count: %v", err)
+		return errors.Annotatef(err, "failed to retrieve starting txns count")
 	}
 	lastTxnsCount, err := getPruneLastTxnsCount(txnsPrune)
 	if err != nil {
-		return fmt.Errorf("failed to retrieve pruning stats: %v", err)
+		return errors.Annotatef(err, "failed to retrieve pruning stats")
 	}
 
 	required, rationale := shouldPrune(lastTxnsCount, txnsCount, pruneOpts)
@@ -130,7 +129,7 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 
 	stashDocsBefore, err := txnsStash.Count()
 	if err != nil {
-		return fmt.Errorf("failed to retrieve starting %q count: %v", txnsStashName, err)
+		return errors.Annotatef(err, "failed to retrieve starting %q count", txnsStashName)
 	}
 
 	stats, err := CleanAndPrune(CleanAndPruneArgs{
@@ -142,11 +141,11 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 
 	txnsCountAfter, err := txns.Count()
 	if err != nil {
-		return fmt.Errorf("failed to retrieve final txns count: %v", err)
+		return errors.Annotatef(err, "failed to retrieve final txns count")
 	}
 	stashDocsAfter, err := txnsStash.Count()
 	if err != nil {
-		return fmt.Errorf("failed to retrieve final %q count: %v", txnsStashName, err)
+		return errors.Annotatef(err, "failed to retrieve final %q count", txnsStashName)
 	}
 	elapsed := time.Since(started)
 	logger.Infof("txn pruning complete after %v. txns now: %d, inspected %d collections, %d docs (%d cleaned)\n   removed %d stash docs and %d txn docs",
@@ -210,7 +209,7 @@ func CleanAndPrune(args CleanAndPruneArgs) (CleanupStats, error) {
 	var stats CleanupStats
 
 	if err := args.validate(); err != nil {
-		return stats, err
+		return stats, errors.Trace(err)
 	}
 
 	db := args.Txns.Database
@@ -218,7 +217,7 @@ func CleanAndPrune(args CleanAndPruneArgs) (CleanupStats, error) {
 	if args.TxnsCount <= 0 {
 		txnsCount, err := args.Txns.Count()
 		if err != nil {
-			return stats, err
+			return stats, errors.Trace(err)
 		}
 		args.TxnsCount = txnsCount
 	}
@@ -226,21 +225,21 @@ func CleanAndPrune(args CleanAndPruneArgs) (CleanupStats, error) {
 	oracle, cleanup, err := getOracle(args, maxMemoryTokens)
 	defer cleanup()
 	if err != nil {
-		return stats, err
+		return stats, errors.Trace(err)
 	}
 	txnsStashName := args.Txns.Name + ".stash"
 	txnsStash := db.C(txnsStashName)
 
 	if err := cleanupStash(oracle, txnsStash, &stats); err != nil { // XXX
-		return stats, err
+		return stats, errors.Trace(err)
 	}
 
 	if err := cleanupAllCollections(db, oracle, args.Txns.Name, &stats); err != nil {
-		return stats, err
+		return stats, errors.Trace(err)
 	}
 
 	if err := PruneTxns(oracle, args.Txns, &stats); err != nil {
-		return stats, err
+		return stats, errors.Trace(err)
 	}
 	return stats, nil
 }
@@ -263,7 +262,7 @@ func getPruneLastTxnsCount(txnsPrune *mgo.Collection) (int, error) {
 	if err == mgo.ErrNotFound {
 		return -1, nil
 	} else if err != nil {
-		return -1, fmt.Errorf("failed to load pruning stats pointer: %v", err)
+		return -1, errors.Annotatef(err, "failed to load pruning stats pointer")
 	}
 
 	// Get the stats.
@@ -275,7 +274,7 @@ func getPruneLastTxnsCount(txnsPrune *mgo.Collection) (int, error) {
 		logger.Warningf("pruning stats pointer was broken - will recover")
 		return -1, nil
 	} else if err != nil {
-		return -1, fmt.Errorf("failed to load pruning stats: %v", err)
+		return -1, errors.Annotatef(err, "failed to load pruning stats")
 	}
 	return doc.TxnsAfter, nil
 }
@@ -297,13 +296,13 @@ func writePruneTxnsCount(
 		StashDocsAfter:  stashAfter,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to write prune stats: %v", err)
+		return errors.Annotatef(err, "failed to write prune stats")
 	}
 
 	// Set pointer to latest stats document.
 	_, err = txnsPrune.UpsertId("last", bson.M{"$set": bson.M{"id": id}})
 	if err != nil {
-		return fmt.Errorf("failed to write prune stats pointer: %v", err)
+		return errors.Annotatef(err, "failed to write prune stats pointer")
 	}
 	return nil
 }
@@ -333,7 +332,7 @@ func PruneTxns(oracle Oracle, txns *mgo.Collection, stats *CleanupStats) error {
 	db := txns.Database
 	collNames, err := db.CollectionNames()
 	if err != nil {
-		return fmt.Errorf("reading collection names: %v", err)
+		return errors.Annotatef(err, "reading collection names")
 	}
 	collNames = txnCollections(collNames, txns.Name)
 	logger.Debugf("%d collections with txns to examine", len(collNames))
@@ -372,7 +371,7 @@ func PruneTxns(oracle Oracle, txns *mgo.Collection, stats *CleanupStats) error {
 				if len(toRemove) >= maxBulkOps {
 					referencedCount += len(toRemove)
 					if count, err := oracle.RemoveTxns(toRemove); err != nil {
-						return fmt.Errorf("removing completed txns: %v", err)
+						return errors.Annotatef(err, "removing completed txns")
 					} else {
 						removedCount += count
 					}
@@ -381,13 +380,13 @@ func PruneTxns(oracle Oracle, txns *mgo.Collection, stats *CleanupStats) error {
 			}
 		}
 		if err := iter.Close(); err != nil {
-			return fmt.Errorf("failed to read docs: %v", err)
+			return errors.Annotatef(err, "failed to read docs")
 		}
 	}
 	if len(toRemove) > 0 {
 		referencedCount += len(toRemove)
 		if count, err := oracle.RemoveTxns(toRemove); err != nil {
-			return fmt.Errorf("removing completed txns: %v", err)
+			return errors.Annotatef(err, "removing completed txns")
 		} else {
 			removedCount += count
 		}
@@ -414,14 +413,14 @@ func PruneTxns(oracle Oracle, txns *mgo.Collection, stats *CleanupStats) error {
 	var txnId bson.ObjectId
 	for txnId, loopErr = iter.Next(); loopErr == nil; txnId, loopErr = iter.Next() {
 		if err := remover.Remove(txnId); err != nil {
-			return fmt.Errorf("removing txns: %v", err)
+			return errors.Annotatef(err, "removing txns")
 		}
 		if t.isAfter() {
 			logger.Debugf("%d completed txns pruned so far", remover.Removed())
 		}
 	}
 	if err := remover.Flush(); err != nil {
-		return fmt.Errorf("removing txns: %v", err)
+		return errors.Annotatef(err, "removing txns")
 	}
 	if loopErr != EOF {
 		return loopErr
@@ -471,7 +470,7 @@ func txnCollections(inNames []string, txnsName string) []string {
 func cleanupAllCollections(db *mgo.Database, oracle Oracle, txnsName string, stats *CleanupStats) error {
 	collNames, err := db.CollectionNames()
 	if err != nil {
-		return fmt.Errorf("reading collection names: %v", err)
+		return errors.Annotatef(err, "reading collection names")
 	}
 	collNames = txnCollections(collNames, txnsName)
 	logger.Debugf("%d collections with txns to cleanup", len(collNames))

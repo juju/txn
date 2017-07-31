@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/juju/errors"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 )
@@ -198,7 +199,7 @@ func (o *DBOracle) prepare() (func(), error) {
 	}
 	if err != nil {
 		o.cleanup()
-		return noopCleanup, fmt.Errorf("reading completed txns: %v", err)
+		return noopCleanup, errors.Annotatef(err, "reading completed txns")
 	}
 	return o.cleanup, nil
 }
@@ -225,7 +226,7 @@ func (o *DBOracle) cleanup() {
 // CompletedTokens looks at the list of tokens and finds what referenced txns
 // are completed, and then returns the set of tokens that are completed.
 func (o *DBOracle) CompletedTokens(tokens []string) (map[string]bool, error) {
-	objectIds := make([]bson.ObjectId, 0, len(tokens))
+	objectIds := make(map[bson.ObjectId]bool, len(tokens))
 
 	// The nonce is generated during preparing, and if 2 flushers race,
 	// only one nonce makes it into the final transaction. However, other
@@ -233,22 +234,24 @@ func (o *DBOracle) CompletedTokens(tokens []string) (map[string]bool, error) {
 	// thus won't be applied and can be considered completed.)
 	for _, token := range tokens {
 		objId := txnTokenToId(token)
-		objectIds = append(objectIds, objId)
+		objectIds[objId] = true
 	}
-	query := o.working.Find(bson.M{"_id": bson.M{"$in": objectIds}})
-	query = query.Select(bson.M{"_id": 1})
-	iter := query.Iter()
+
+	iter := o.working.Find(nil).Select(bson.M{"_id": 1}).Iter()
 	var txnDoc struct {
 		Id bson.ObjectId `bson:"_id"`
 	}
 	foundIdHex := make(map[string]bool, len(objectIds))
 	for iter.Next(&txnDoc) {
+		if !objectIds[txnDoc.Id] {
+			continue
+		}
 		foundIdHex[txnDoc.Id.Hex()] = true
 	}
-	if err := iter.Close(); err != nil {
+	if err := iter.Err(); err != nil {
 		if err != mgo.ErrNotFound {
 			// Not found is ok, the transactions may not be complete
-			return nil, err
+			return nil, errors.Trace(err)
 		}
 	}
 	result := make(map[string]bool, len(foundIdHex))
@@ -271,7 +274,7 @@ func (o *DBOracle) CompletedTokens(tokens []string) (map[string]bool, error) {
 func (o *DBOracle) RemoveTxns(txnIds []bson.ObjectId) (int, error) {
 	info, err := o.working.RemoveAll(bson.M{"_id": bson.M{"$in": txnIds}})
 	if err != nil {
-		return 0, fmt.Errorf("error removing transaction ids: %v", err)
+		return 0, errors.Annotatef(err, "error removing transaction ids")
 	}
 	if info != nil {
 		return info.Removed, nil
