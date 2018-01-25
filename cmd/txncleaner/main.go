@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
-	mgo "gopkg.in/mgo.v2"
+	mgo "github.com/juju/mgo"
 
 	"github.com/juju/txn"
 )

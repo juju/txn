@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/juju/mgo"
+	"github.com/juju/mgo/bson"
 )
 
 // CollectionConfig is the definition of what we will be cleaning up.
