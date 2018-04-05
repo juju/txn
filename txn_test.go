@@ -41,7 +41,10 @@ func (s *txnSuite) SetUpTest(c *gc.C) {
 	s.MgoSuite.SetUpTest(c)
 	db := s.Session.DB("juju")
 	s.collection = db.C("test")
-	s.txnRunner = jujutxn.NewRunner(jujutxn.RunnerParams{Database: db})
+	s.txnRunner = jujutxn.NewRunner(jujutxn.RunnerParams{
+		Database: db,
+		Clock: testing.NewClock(time.Now()),
+	})
 }
 
 func (s *txnSuite) TearDownTest(c *gc.C) {
@@ -276,7 +279,9 @@ func (s *txnSuite) TestTransientFailure(c *gc.C) {
 }
 
 func (s *txnSuite) TestRunFailureIntermittentUnexpectedMessage(c *gc.C) {
-	runner := jujutxn.NewRunner(jujutxn.RunnerParams{})
+	runner := jujutxn.NewRunner(jujutxn.RunnerParams{
+		Clock: testing.NewClock(time.Now()),
+	})
 	fake := &fakeRunner{errors: []error{errors.New("unexpected message")}}
 	jujutxn.SetRunnerFunc(runner, fake.new)
 	tries := 0
@@ -292,7 +297,9 @@ func (s *txnSuite) TestRunFailureIntermittentUnexpectedMessage(c *gc.C) {
 }
 
 func (s *txnSuite) TestRunFailureAlwaysUnexpectedMessage(c *gc.C) {
-	runner := jujutxn.NewRunner(jujutxn.RunnerParams{})
+	runner := jujutxn.NewRunner(jujutxn.RunnerParams{
+		Clock: testing.NewClock(time.Now()),
+	})
 	fake := &fakeRunner{errors: []error{
 		errors.New("unexpected message"),
 		errors.New("unexpected message"),

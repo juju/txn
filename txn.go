@@ -178,7 +178,7 @@ func NewRunner(params RunnerParams) Runner {
 	txnRunner.newRunner = txnRunner.newRunnerImpl
 	txnRunner.clock = params.Clock
 	if txnRunner.clock == nil {
-		txnRunner.clock = clock.WallClock
+		panic("params.Clock must not be nil")
 	}
 	return txnRunner
 }
@@ -247,7 +247,6 @@ func (tr *transactionRunner) RunTransaction(ops []txn.Op) error {
 			logger.Infof("transaction 'before' hook end")
 		}
 	}
-	// TODO: Should this be a clock instead?
 	start := tr.clock.Now()
 	runner := tr.newRunner()
 	err := runner.Run(ops, "", nil)
