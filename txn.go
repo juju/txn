@@ -166,6 +166,7 @@ func NewRunner(params RunnerParams) Runner {
 		transactionCollectionName: params.TransactionCollectionName,
 		changeLogName:             params.ChangeLogName,
 		runTransactionObserver:    params.RunTransactionObserver,
+		clock:					   params.Clock,
 	}
 	if txnRunner.transactionCollectionName == "" {
 		txnRunner.transactionCollectionName = defaultTxnCollectionName
@@ -176,9 +177,10 @@ func NewRunner(params RunnerParams) Runner {
 	txnRunner.testHooks = make(chan ([]TestHook), 1)
 	txnRunner.testHooks <- nil
 	txnRunner.newRunner = txnRunner.newRunnerImpl
-	txnRunner.clock = params.Clock
 	if txnRunner.clock == nil {
-		panic("params.Clock must not be nil")
+		// We allow callers to pass in a nil clock because it is only used if
+		// they also specify a RunTransactionObserver.
+		txnRunner.clock = clock.WallClock
 	}
 	return txnRunner
 }
