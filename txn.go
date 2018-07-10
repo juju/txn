@@ -166,7 +166,7 @@ func NewRunner(params RunnerParams) Runner {
 		transactionCollectionName: params.TransactionCollectionName,
 		changeLogName:             params.ChangeLogName,
 		runTransactionObserver:    params.RunTransactionObserver,
-		clock:					   params.Clock,
+		clock: params.Clock,
 	}
 	if txnRunner.transactionCollectionName == "" {
 		txnRunner.transactionCollectionName = defaultTxnCollectionName
