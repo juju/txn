@@ -109,7 +109,6 @@ type DBOracle struct {
 	working         *mgo.Collection
 	thresholdTime   time.Time
 	maxTxns         uint64
-	shouldRetry     bool
 	usingMongoOut   bool
 	checkedTokens   uint64
 	completedTokens uint64
@@ -153,7 +152,6 @@ func (o *DBOracle) prepareWorkingDirectly() error {
 		docsToInsert = docsToInsert[:0]
 		return err
 	}
-	count := uint64(0)
 	for iter.Next(&txnDoc) {
 		aCopy := txnDoc
 		docsToInsert = append(docsToInsert, aCopy)
@@ -165,7 +163,6 @@ func (o *DBOracle) prepareWorkingDirectly() error {
 		if t.isAfter() {
 			logger.Debugf("copied %d documents", docCount)
 		}
-		count++
 	}
 	if err := flush(); err != nil {
 		return err

@@ -50,6 +50,7 @@ const (
 	// we aren't removing.
 	maxIterCount = 5
 
+	// maxMemoryTokens caps our in-memory cache. When it is full, we will
 	// apply our current list of items to process, and then flag the loop
 	// to run again. At 100k the maximum memory was around 200MB.
 	maxMemoryTokens = 50000

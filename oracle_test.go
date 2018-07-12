@@ -187,7 +187,7 @@ func (s *OracleSuite) TestLimitsTxns(c *gc.C) {
 			Insert: bson.M{},
 		})
 	}
-	// We should only find 10 of the 100 txns.
+	// We should only find 10 of the 50 txns.
 	c.Check(s.countFoundTxns(c, 10), gc.Equals, 10)
 	// using a limit of '0' means all txns
 	c.Check(s.countFoundTxns(c, 0), gc.Equals, 50)
