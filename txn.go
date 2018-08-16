@@ -76,6 +76,17 @@ type PruneOptions struct {
 	// MaxTime and have a status of Completed or Aborted. Passing the
 	// zero Time will cause us to only filter on the Status field.
 	MaxTime time.Time
+
+	// MaxBatchTransactions is the most transactions that we will prune in a single pass.
+	// It is possible to pass 0 to prune all transactions in a pass. Note
+	// that MaybePruneTransactions will always process all transactions, it
+	// is just whether we do so in multiple passes, or whether it is done
+	// all at once.
+	MaxBatchTransactions uint64
+
+	// MaxBatches is the maximum number of passes we will attempt. 0 or
+	// negative values are treated as do a single pass.
+	MaxBatches int
 }
 
 // Runner instances applies operations to collections in a database.
