@@ -142,6 +142,7 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 	var stashDocsAfter int
 	txnsCountBefore := txnsCount
 	batchCount := 0
+	wantsRetry := false
 	for ; batchCount < pruneOpts.MaxBatches; batchCount++ {
 		// Note: jam 2018-08-16 If there are lots of txns that cannot be
 		// pruned, then batch size will mean we end up looking at the same
@@ -168,6 +169,7 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 		stats.DocsCleaned += batchStats.DocsCleaned
 		stats.StashDocumentsRemoved += batchStats.StashDocumentsRemoved
 		stats.TransactionsRemoved += batchStats.TransactionsRemoved
+		wantsRetry = batchStats.ShouldRetry
 		if !batchStats.ShouldRetry {
 			break
 		}
@@ -176,6 +178,9 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 		txnsCount = txnsCountAfter
 	}
 	elapsed := time.Since(started)
+	if wantsRetry {
+		logger.Warningf("after %d passes, we still think there are more transactions to be pruned", batchCount)
+	}
 	logger.Infof("txn pruning complete after %v in %d batches. txns now: %d, inspected %d collections, %d docs (%d cleaned)\n   removed %d stash docs and %d txn docs",
 		elapsed, batchCount, txnsCountAfter, stats.CollectionsInspected, stats.DocsInspected, stats.DocsCleaned, stats.StashDocumentsRemoved, stats.TransactionsRemoved)
 	completed := time.Now()
@@ -204,7 +209,7 @@ type CleanAndPruneArgs struct {
 
 	// MaxTransactionsToProcess defines how many completed transactions that we will evaluate in this batch.
 	// A value of 0 indicates we should evaluate all completed transactions.
-	MaxTransactionsToProcess uint64
+	MaxTransactionsToProcess int
 }
 
 func (args *CleanAndPruneArgs) validate() error {
@@ -281,7 +286,7 @@ func CleanAndPrune(args CleanAndPruneArgs) (CleanupStats, error) {
 	return stats, nil
 }
 
-func getOracle(args CleanAndPruneArgs, maxMemoryTxns int, maxTxns uint64) (Oracle, func(), error) {
+func getOracle(args CleanAndPruneArgs, maxMemoryTxns int, maxTxns int) (Oracle, func(), error) {
 	// If we don't have very many transactions, just use the in-memory version
 	if args.TxnsCount < maxMemoryTxns {
 		return NewMemOracle(args.Txns, args.MaxTime, maxTxns)

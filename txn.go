@@ -82,7 +82,7 @@ type PruneOptions struct {
 	// that MaybePruneTransactions will always process all transactions, it
 	// is just whether we do so in multiple passes, or whether it is done
 	// all at once.
-	MaxBatchTransactions uint64
+	MaxBatchTransactions int
 
 	// MaxBatches is the maximum number of passes we will attempt. 0 or
 	// negative values are treated as do a single pass.
