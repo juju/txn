@@ -6,8 +6,8 @@ package txn_test
 import (
 	"time"
 
+	"github.com/juju/clock/testclock"
 	"github.com/juju/loggo"
-	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
 	"gopkg.in/mgo.v2/bson"
@@ -32,7 +32,7 @@ func (s *PruneSuite) maybePruneWithTimestamp(c *gc.C, pruneFactor float32, times
 		Database:                  s.db,
 		TransactionCollectionName: s.txns.Name,
 		ChangeLogName:             s.txns.Name + ".log",
-		Clock:                     testing.NewClock(time.Now()),
+		Clock:                     testclock.NewClock(time.Now()),
 	})
 	err := r.MaybePruneTransactions(jujutxn.PruneOptions{
 		PruneFactor:        pruneFactor,
@@ -499,7 +499,7 @@ func (s *PruneSuite) TestMaxBatchesAndMaxBatchTransactions(c *gc.C) {
 		Database:                  s.db,
 		TransactionCollectionName: s.txns.Name,
 		ChangeLogName:             s.txns.Name + ".log",
-		Clock:                     testing.NewClock(time.Now()),
+		Clock:                     testclock.NewClock(time.Now()),
 	})
 	err := r.MaybePruneTransactions(jujutxn.PruneOptions{
 		PruneFactor:          2.0,
