@@ -4,13 +4,11 @@
 package txn
 
 import (
-	// "errors"
-	// "fmt"
-	// "strings"
 	"time"
 
 	"github.com/juju/errors"
 	"github.com/juju/lru"
+	"github.com/kr/pretty"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 )
@@ -175,6 +173,10 @@ func (p *IncrementalPruner) pruneNextBatch(iter *mgo.Iter, txnsColl, txnsStash *
 					// by removing documents directly from the collection, without using a transaction. Even
 					// though they are *created* with transactions... bad metrics, bad dog
 					logger.Tracef("ignoring missing metrics doc: %v", docKey)
+				} else if docKey.Collection == "cloudimagemetadata" {
+					// There is an upgrade step in 2.3.4 that bulk deletes all cloudimagemetadata that have particular
+					// attributes, ignoring transactions...
+					logger.Tracef("ignoring missing cloudimagemetadat doc: %v", docKey)
 				} else {
 					logger.Warningf("transaction %q referenced document %v but it could not be found",
 						txn.Id.Hex(), docKey)
@@ -284,7 +286,7 @@ func (p *IncrementalPruner) Prune(args CleanAndPruneArgs) (PrunerStats, error) {
 	// Maybe we can just remove anything that
 	logger.Infof("pruning removed %d txns and cleaned %d docs in %s.",
 		p.stats.TxnsRemoved, p.stats.DocQueuesCleaned, time.Since(tStart).Round(time.Millisecond))
-
+	logger.Debugf("prune stats: %# v", pretty.Formatter(p.stats))
 	return p.stats, nil
 }
 
