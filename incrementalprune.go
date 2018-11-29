@@ -105,7 +105,11 @@ func (p *IncrementalPruner) lookupDocs(keys docKeySet, txnsStash *mgo.Collection
 		// For all the other documents, now we need to check txns.stash
 		foundMissingKeys := make(map[stashDocKey]struct{}, len(missingKeys))
 		p.stats.StashQueries++
-		query := txnsStash.Find(bson.M{"_id": bson.M{"$in": missingKeys}})
+		missingSlice := make([]stashDocKey, 0, len(missingKeys))
+		for key := range missingKeys {
+			missingSlice = append(missingSlice, key)
+		}
+		query := txnsStash.Find(bson.M{"_id": bson.M{"$in": missingSlice}})
 		query.Select(bson.M{"_id": 1, "txn-queue": 1})
 		query.Batch(queryDocBatchSize)
 		iter := query.Iter()
