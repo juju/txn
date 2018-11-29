@@ -276,7 +276,6 @@ func (p *IncrementalPruner) Prune(args CleanAndPruneArgs) (PrunerStats, error) {
 		"o.c": 1,
 		"o.d": 1,
 	})
-	query.Sort("_id")
 	timer := newSimpleTimer(15 * time.Second)
 	query.Batch(pruneTxnBatchSize)
 	iter := query.Iter()
