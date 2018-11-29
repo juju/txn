@@ -4,11 +4,12 @@
 package txn
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/juju/errors"
+	"github.com/juju/lru"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 )
@@ -252,6 +253,19 @@ func CleanAndPrune(args CleanAndPruneArgs) (CleanupStats, error) {
 	}
 
 	db := args.Txns.Database
+
+	pruner := IncrementalPruner{
+		docCache: lru.New(pruneDocCacheSize),
+	}
+	pstats, err := pruner.Prune(args)
+	if err != nil {
+		return stats, errors.Trace(err)
+	}
+	stats.TransactionsRemoved = int(pstats.TxnsRemoved)
+	stats.DocsCleaned = int(pstats.DocQueuesCleaned)
+	stats.StashDocumentsRemoved = 0
+	stats.DocsInspected = int(pstats.DocCacheMisses + pstats.DocCacheHits)
+	return stats, nil
 
 	if args.TxnsCount <= 0 {
 		txnsCount, err := args.Txns.Count()
