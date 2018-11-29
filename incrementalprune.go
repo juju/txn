@@ -170,11 +170,18 @@ func (p *IncrementalPruner) pruneNextBatch(iter *mgo.Iter, txnsColl, txnsStash *
 		for _, docKey := range txn.Ops {
 			doc, ok := docMap[docKey]
 			if !ok {
-				logger.Warningf("transaction %q referenced document %v but it could not be found",
-					txn.Id.Hex(), docKey)
-				// This is usually a sign of corruption, but for the purposes of pruning, we'll just treat it as a
-				// transaction that cannot be cleaned up.
-				txnCanBeRemoved = false
+				if docKey.Collection == "metrics" {
+					// XXX: This is a special case. Metrics are *known* to violate the transaction guarantees
+					// by removing documents directly from the collection, without using a transaction. Even
+					// though they are *created* with transactions... bad metrics, bad dog
+					logger.Tracef("ignoring missing metrics doc: %v", docKey)
+				} else {
+					logger.Warningf("transaction %q referenced document %v but it could not be found",
+						txn.Id.Hex(), docKey)
+					// This is usually a sign of corruption, but for the purposes of pruning, we'll just treat it as a
+					// transaction that cannot be cleaned up.
+					txnCanBeRemoved = false
+				}
 			}
 			tokensToPull := make([]string, 0)
 			newQueue := make([]string, 0)
