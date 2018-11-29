@@ -235,6 +235,9 @@ func (p *IncrementalPruner) pruneNextBatch(iter *mgo.Iter, txnsColl, txnsStash *
 		}
 	}
 	if len(txnsToDelete) > 0 {
+		// TODO(jam): 2018-11-29 Evaluate if txnsColl.Bulk().RemoveAll is any better than txnsColl.RemoveAll, we especially want
+		// to be using Unordered()
+		// The other option is lots of Bulk.Remove() calls.
 		results, err := txnsColl.RemoveAll(bson.M{
 			"_id": bson.M{"$in": txnsToDelete},
 		})
@@ -263,6 +266,9 @@ func (p *IncrementalPruner) Prune(args CleanAndPruneArgs) (PrunerStats, error) {
 	query.Batch(pruneTxnBatchSize)
 	iter := query.Iter()
 	for {
+		// TODO(jam): 2018-11-29 Create 2 goroutines, so that we can be calling txns.Remove() while the other routine is0
+		// reading docs, and cleaning up txn-queues. Not sure if that makes load bad, or if we get a 2x speedup because
+		// we can use one connection for reading docs and txn-queues, and a different connection for txns.Remove()
 		done, err := p.pruneNextBatch(iter, txns, txnsStash)
 		if err != nil {
 			iterErr := iter.Close()
