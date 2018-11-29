@@ -252,8 +252,6 @@ func CleanAndPrune(args CleanAndPruneArgs) (CleanupStats, error) {
 		return stats, err
 	}
 
-	db := args.Txns.Database
-
 	pruner := IncrementalPruner{
 		docCache: lru.New(pruneDocCacheSize),
 	}
@@ -265,38 +263,6 @@ func CleanAndPrune(args CleanAndPruneArgs) (CleanupStats, error) {
 	stats.DocsCleaned = int(pstats.DocQueuesCleaned)
 	stats.StashDocumentsRemoved = 0
 	stats.DocsInspected = int(pstats.DocCacheMisses + pstats.DocCacheHits)
-	return stats, nil
-
-	if args.TxnsCount <= 0 {
-		txnsCount, err := args.Txns.Count()
-		if err != nil {
-			return stats, err
-		}
-		args.TxnsCount = txnsCount
-	}
-
-	oracle, cleanup, err := getOracle(args, maxMemoryTokens, args.MaxTransactionsToProcess)
-	defer cleanup()
-	if err != nil {
-		return stats, err
-	}
-	txnsStashName := args.Txns.Name + ".stash"
-	txnsStash := db.C(txnsStashName)
-
-	if args.MaxTransactionsToProcess > 0 && oracle.Count() > int(float64(args.MaxTransactionsToProcess)*0.9) {
-		stats.ShouldRetry = true
-	}
-	if err := cleanupStash(oracle, txnsStash, &stats); err != nil { // XXX
-		return stats, err
-	}
-
-	if err := cleanupAllCollections(db, oracle, args.Txns.Name, &stats); err != nil {
-		return stats, err
-	}
-
-	if err := PruneTxns(oracle, args.Txns, &stats); err != nil {
-		return stats, err
-	}
 	return stats, nil
 }
 
