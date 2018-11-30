@@ -51,11 +51,123 @@ type PrunerStats struct {
 	TxnRemoveTime      time.Duration
 }
 
+func (p *IncrementalPruner) Prune(args CleanAndPruneArgs) (PrunerStats, error) {
+	tStart := time.Now()
+	txns := args.Txns
+	db := txns.Database
+	txnsStashName := args.Txns.Name + ".stash"
+	txnsStash := db.C(txnsStashName)
+	query := txns.Find(completedOldTransactionMatch(args.MaxTime))
+	query.Select(bson.M{
+		"_id": 1,
+		"o.c": 1,
+		"o.d": 1,
+	})
+	// Sorting by _id helps make sure that we are grouping the transactions close to each other.
+	query.Sort("_id")
+	timer := newSimpleTimer(15 * time.Second)
+	query.Batch(pruneTxnBatchSize)
+	iter := query.Iter()
+	for {
+		// TODO(jam): 2018-11-29 Create 2 goroutines, so that we can be calling txns.Remove() while the other routine is0
+		// reading docs, and cleaning up txn-queues. Not sure if that makes load bad, or if we get a 2x speedup because
+		// we can use one connection for reading docs and txn-queues, and a different connection for txns.Remove()
+		done, err := p.pruneNextBatch(iter, txns, txnsStash)
+		if err != nil {
+			iterErr := iter.Close()
+			if iterErr != nil {
+				logger.Warningf("ignoring iteration close error: %v", iterErr)
+			}
+			return p.stats, errors.Trace(err)
+		}
+		if done {
+			break
+		}
+		if timer.isAfter() {
+			logger.Debugf("pruning has removed %d txns, handling %d docs (%d in cache) %.0ftxn/s",
+				p.stats.TxnsRemoved, p.stats.DocCacheHits+p.stats.DocCacheMisses, p.stats.DocCacheHits,
+				(float64(p.stats.TxnsRemoved) / time.Since(tStart).Seconds()))
+		}
+	}
+	if err := iter.Close(); err != nil {
+		return p.stats, errors.Trace(err)
+	}
+	// TODO: Now we should iterate over txns.Stash and remove documents that aren't referenced by any transactions.
+	// Maybe we can just remove anything that
+	logger.Infof("pruning removed %d txns and cleaned %d docs in %s.",
+		p.stats.TxnsRemoved, p.stats.DocQueuesCleaned, time.Since(tStart).Round(time.Millisecond))
+	logger.Debugf("prune stats: %s", pretty.Sprint(p.stats))
+	return p.stats, nil
+}
+
 func checkTime(toAdd *time.Duration) func() {
 	tStart := time.Now()
 	return func() {
 		(*toAdd) += time.Since(tStart)
 	}
+}
+
+func (p *IncrementalPruner) pruneNextBatch(iter *mgo.Iter, txnsColl, txnsStash *mgo.Collection) (bool, error) {
+	done, txns, txnsBeingCleaned, docsToCheck := p.findTxnsAndDocsToLookup(iter)
+	// Now that we have a bunch of documents we want to look at, load them from the collections
+	foundDocs, err := p.lookupDocs(docsToCheck, txnsStash)
+	if err != nil {
+		return done, errors.Trace(err)
+	}
+	txnsToDelete, err := p.cleanupDocs(docsToCheck, foundDocs, txns, txnsBeingCleaned, txnsColl.Database, txnsStash)
+	if err != nil {
+		return done, errors.Trace(err)
+	}
+	if len(txnsToDelete) > 0 {
+		p.removeTxns(txnsToDelete, txnsColl)
+	}
+	return done, nil
+}
+
+// lookupDocs searches the cache and then looks in the database for the txn-queue of all the referenced document keys.
+func (p *IncrementalPruner) lookupDocs(keys docKeySet, txnsStash *mgo.Collection) (docMap, error) {
+	defer checkTime(&p.stats.DocLookupTime)()
+	docs, docsByCollection := p.lookupDocsInCache(keys)
+	missingKeys, err := p.updateDocsFromCollections(docs, docsByCollection, txnsStash.Database)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	if len(missingKeys) > 0 {
+		err := p.updateDocsFromStash(docs, missingKeys, txnsStash)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+	}
+
+	return docs, nil
+}
+
+func (p *IncrementalPruner) findTxnsAndDocsToLookup(iter *mgo.Iter) (bool, []txnDoc, map[bson.ObjectId]struct{}, docKeySet) {
+	defer checkTime(&p.stats.TxnReadTime)()
+	done := false
+	// First, read all the txns to find the document identities we might care about
+	txns := make([]txnDoc, 0, pruneTxnBatchSize)
+	// We expect a doc in each txn
+	docsToCheck := make(docKeySet, pruneTxnBatchSize)
+	txnsBeingCleaned := make(map[bson.ObjectId]struct{})
+	for count := 0; count < pruneTxnBatchSize; count++ {
+		var txn txnDoc
+		if iter.Next(&txn) {
+			txns = append(txns, txn)
+			for _, key := range txn.Ops {
+				if _, ok := p.missingCache.Get(key); ok {
+					// known to be missing, don't bother
+					p.stats.DocMissingCacheHit++
+					continue
+				}
+				docsToCheck[key] = struct{}{}
+			}
+			txnsBeingCleaned[txn.Id] = struct{}{}
+		} else {
+			done = true
+		}
+	}
+	return done, txns, txnsBeingCleaned, docsToCheck
 }
 
 func (p *IncrementalPruner) lookupDocsInCache(keys docKeySet) (docMap, map[string][]interface{}) {
@@ -165,87 +277,6 @@ func (p *IncrementalPruner) updateDocsFromStash(
 	return nil
 }
 
-// lookupDocs searches the cache and then looks in the database for the txn-queue of all the referenced document keys.
-func (p *IncrementalPruner) lookupDocs(keys docKeySet, txnsStash *mgo.Collection) (docMap, error) {
-	defer checkTime(&p.stats.DocLookupTime)()
-	docs, docsByCollection := p.lookupDocsInCache(keys)
-	missingKeys, err := p.updateDocsFromCollections(docs, docsByCollection, txnsStash.Database)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	if len(missingKeys) > 0 {
-		err := p.updateDocsFromStash(docs, missingKeys, txnsStash)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-	}
-
-	return docs, nil
-}
-
-func (p *IncrementalPruner) findTxnsAndDocsToLookup(iter *mgo.Iter) (bool, []txnDoc, map[bson.ObjectId]struct{}, docKeySet) {
-	defer checkTime(&p.stats.TxnReadTime)()
-	done := false
-	// First, read all the txns to find the document identities we might care about
-	txns := make([]txnDoc, 0, pruneTxnBatchSize)
-	// We expect a doc in each txn
-	docsToCheck := make(docKeySet, pruneTxnBatchSize)
-	txnsBeingCleaned := make(map[bson.ObjectId]struct{})
-	for count := 0; count < pruneTxnBatchSize; count++ {
-		var txn txnDoc
-		if iter.Next(&txn) {
-			txns = append(txns, txn)
-			for _, key := range txn.Ops {
-				if _, ok := p.missingCache.Get(key); ok {
-					// known to be missing, don't bother
-					p.stats.DocMissingCacheHit++
-					continue
-				}
-				docsToCheck[key] = struct{}{}
-			}
-			txnsBeingCleaned[txn.Id] = struct{}{}
-		} else {
-			done = true
-		}
-	}
-	return done, txns, txnsBeingCleaned, docsToCheck
-}
-
-func (p *IncrementalPruner) findTxnsToPull(doc docWithQueue, txnsBeingCleaned map[bson.ObjectId]struct{}) ([]string, []string, []bson.ObjectId) {
-	// We expect that *most* of the time, we won't pull any txns, because old txns will already have been removed
-	// Because of this, we actually do 2 passes over the data. The first time we are seeing if there is anything that
-	// might be pulled, and the second actually builds the new lists
-	// DocQueuesCleaned:253,438,
-	// DocsAlreadyClean:29,103,909
-	// So about 100x more likely to not have anything to do. No need to allocate the slices we won't use.
-	hasChanges := false
-	for _, txnId := range doc.Txns() {
-		if _, isCleaned := txnsBeingCleaned[txnId]; isCleaned {
-			hasChanges = true
-			break
-		}
-	}
-	if !hasChanges {
-		// No changes to make
-		return nil, nil, nil
-	}
-	tokensToPull := make([]string, 0)
-	newQueue := make([]string, 0, len(doc.Queue))
-	newTxns := make([]bson.ObjectId, 0, len(doc.Queue))
-	txnIds := doc.Txns()
-	for i := range doc.Queue {
-		token := doc.Queue[i]
-		txnId := txnIds[i]
-		if _, isCleaned := txnsBeingCleaned[txnId]; isCleaned {
-			tokensToPull = append(tokensToPull, token)
-		} else {
-			newQueue = append(newQueue, token)
-			newTxns = append(newTxns, txnId)
-		}
-	}
-	return tokensToPull, newQueue, newTxns
-}
-
 func (p *IncrementalPruner) cleanupDocs(
 	docsToCheck docKeySet,
 	foundDocs docMap,
@@ -332,6 +363,41 @@ func (p *IncrementalPruner) cleanupDocs(
 	return txnsToDelete, nil
 }
 
+func (p *IncrementalPruner) findTxnsToPull(doc docWithQueue, txnsBeingCleaned map[bson.ObjectId]struct{}) ([]string, []string, []bson.ObjectId) {
+	// We expect that *most* of the time, we won't pull any txns, because old txns will already have been removed
+	// Because of this, we actually do 2 passes over the data. The first time we are seeing if there is anything that
+	// might be pulled, and the second actually builds the new lists
+	// DocQueuesCleaned:253,438,
+	// DocsAlreadyClean:29,103,909
+	// So about 100x more likely to not have anything to do. No need to allocate the slices we won't use.
+	hasChanges := false
+	for _, txnId := range doc.Txns() {
+		if _, isCleaned := txnsBeingCleaned[txnId]; isCleaned {
+			hasChanges = true
+			break
+		}
+	}
+	if !hasChanges {
+		// No changes to make
+		return nil, nil, nil
+	}
+	tokensToPull := make([]string, 0)
+	newQueue := make([]string, 0, len(doc.Queue))
+	newTxns := make([]bson.ObjectId, 0, len(doc.Queue))
+	txnIds := doc.Txns()
+	for i := range doc.Queue {
+		token := doc.Queue[i]
+		txnId := txnIds[i]
+		if _, isCleaned := txnsBeingCleaned[txnId]; isCleaned {
+			tokensToPull = append(tokensToPull, token)
+		} else {
+			newQueue = append(newQueue, token)
+			newTxns = append(newTxns, txnId)
+		}
+	}
+	return tokensToPull, newQueue, newTxns
+}
+
 func (p *IncrementalPruner) removeTxns(txnsToDelete []bson.ObjectId, txns *mgo.Collection) error {
 	defer checkTime(&p.stats.TxnRemoveTime)()
 	// TODO(jam): 2018-11-29 Evaluate if txnsColl.Bulk().RemoveAll is any better than txnsColl.RemoveAll, we especially want
@@ -346,72 +412,6 @@ func (p *IncrementalPruner) removeTxns(txnsToDelete []bson.ObjectId, txns *mgo.C
 		return errors.Trace(err)
 	}
 	return nil
-}
-
-func (p *IncrementalPruner) pruneNextBatch(iter *mgo.Iter, txnsColl, txnsStash *mgo.Collection) (bool, error) {
-	done, txns, txnsBeingCleaned, docsToCheck := p.findTxnsAndDocsToLookup(iter)
-	// Now that we have a bunch of documents we want to look at, load them from the collections
-	foundDocs, err := p.lookupDocs(docsToCheck, txnsStash)
-	if err != nil {
-		return done, errors.Trace(err)
-	}
-	txnsToDelete, err := p.cleanupDocs(docsToCheck, foundDocs, txns, txnsBeingCleaned, txnsColl.Database, txnsStash)
-	if err != nil {
-		return done, errors.Trace(err)
-	}
-	if len(txnsToDelete) > 0 {
-		p.removeTxns(txnsToDelete, txnsColl)
-	}
-	return done, nil
-}
-
-func (p *IncrementalPruner) Prune(args CleanAndPruneArgs) (PrunerStats, error) {
-	tStart := time.Now()
-	txns := args.Txns
-	db := txns.Database
-	txnsStashName := args.Txns.Name + ".stash"
-	txnsStash := db.C(txnsStashName)
-	query := txns.Find(completedOldTransactionMatch(args.MaxTime))
-	query.Select(bson.M{
-		"_id": 1,
-		"o.c": 1,
-		"o.d": 1,
-	})
-	// Sorting by _id helps make sure that we are grouping the transactions close to each other.
-	query.Sort("_id")
-	timer := newSimpleTimer(15 * time.Second)
-	query.Batch(pruneTxnBatchSize)
-	iter := query.Iter()
-	for {
-		// TODO(jam): 2018-11-29 Create 2 goroutines, so that we can be calling txns.Remove() while the other routine is0
-		// reading docs, and cleaning up txn-queues. Not sure if that makes load bad, or if we get a 2x speedup because
-		// we can use one connection for reading docs and txn-queues, and a different connection for txns.Remove()
-		done, err := p.pruneNextBatch(iter, txns, txnsStash)
-		if err != nil {
-			iterErr := iter.Close()
-			if iterErr != nil {
-				logger.Warningf("ignoring iteration close error: %v", iterErr)
-			}
-			return p.stats, errors.Trace(err)
-		}
-		if done {
-			break
-		}
-		if timer.isAfter() {
-			logger.Debugf("pruning has removed %d txns, handling %d docs (%d in cache) %.3ftxn/s",
-				p.stats.TxnsRemoved, p.stats.DocCacheHits+p.stats.DocCacheMisses, p.stats.DocCacheHits,
-				(float64(p.stats.TxnsRemoved) / time.Since(tStart).Seconds()))
-		}
-	}
-	if err := iter.Close(); err != nil {
-		return p.stats, errors.Trace(err)
-	}
-	// TODO: Now we should iterate over txns.Stash and remove documents that aren't referenced by any transactions.
-	// Maybe we can just remove anything that
-	logger.Infof("pruning removed %d txns and cleaned %d docs in %s.",
-		p.stats.TxnsRemoved, p.stats.DocQueuesCleaned, time.Since(tStart).Round(time.Millisecond))
-	logger.Debugf("prune stats: %s", pretty.Sprint(p.stats))
-	return p.stats, nil
 }
 
 // docWithQueue is used to serialize a Mongo document that has a txn-queue
