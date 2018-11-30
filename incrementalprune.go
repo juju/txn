@@ -21,8 +21,9 @@ const pruneDocCacheSize = 10000
 // and then moves on to newer transactions. It only thinks about 1k txns at a time, because that is the batch size that
 // can be deleted. Instead, it caches documents that it has seen.
 type IncrementalPruner struct {
-	docCache     *lru.LRU
-	missingCache *lru.LRU
+	docCache     DocCache
+	missingCache MissingKeyCache
+	objCache     *lru.LRU
 	stats        PrunerStats
 }
 
@@ -49,6 +50,8 @@ type PrunerStats struct {
 	TxnReadTime        time.Duration
 	TxnsNotRemoved     int
 	TxnRemoveTime      time.Duration
+	ObjCacheHit        int
+	ObjCacheMiss       int
 }
 
 func (p *IncrementalPruner) Prune(args CleanAndPruneArgs) (PrunerStats, error) {
@@ -153,9 +156,13 @@ func (p *IncrementalPruner) findTxnsAndDocsToLookup(iter *mgo.Iter) (bool, []txn
 	for count := 0; count < pruneTxnBatchSize; count++ {
 		var txn txnDoc
 		if iter.Next(&txn) {
+			txn.Id = p.cacheTxnId(txn.Id)
+			for i := range txn.Ops {
+				txn.Ops[i] = p.cacheKey(txn.Ops[i])
+			}
 			txns = append(txns, txn)
 			for _, key := range txn.Ops {
-				if _, ok := p.missingCache.Get(key); ok {
+				if p.missingCache.IsMissing(key) {
 					// known to be missing, don't bother
 					p.stats.DocMissingCacheHit++
 					continue
@@ -185,7 +192,7 @@ func (p *IncrementalPruner) lookupDocsInCache(keys docKeySet) (docMap, map[strin
 			// we are looking at won't be changing. At worst we'll try to cleanup a document that has already been
 			// cleaned up. But since we only process completed transaction we can't miss a document that has the txn
 			// added to it.
-			docs[key] = cacheDoc.(docWithQueue)
+			docs[key] = cacheDoc
 			p.stats.DocCacheHits++
 		} else {
 			p.stats.DocCacheMisses++
@@ -193,6 +200,99 @@ func (p *IncrementalPruner) lookupDocsInCache(keys docKeySet) (docMap, map[strin
 		}
 	}
 	return docs, docsByCollection
+}
+
+func (p *IncrementalPruner) cacheString(s string) string {
+	cacheStr, exists := p.objCache.Get(s)
+	if exists {
+		p.stats.ObjCacheHit++
+		return cacheStr.(string)
+	} else {
+		p.stats.ObjCacheMiss++
+		p.objCache.Add(s, s)
+		return s
+	}
+}
+
+func (p *IncrementalPruner) cacheObj(obj interface{}) interface{} {
+	cached, exists := p.objCache.Get(obj)
+	if exists {
+		p.stats.ObjCacheHit++
+		return cached
+	} else {
+		p.stats.ObjCacheMiss++
+		p.objCache.Add(obj, obj)
+		return obj
+	}
+}
+
+func (p *IncrementalPruner) cacheKey(key docKey) docKey {
+	// TODO(jam): Is it worth caching the docKey object itself?, we aren't using pointers to the docKey
+	// it does save a double lookup on both Collection and DocId
+	key.Collection = p.cacheString(key.Collection)
+	// note that DocId is 99% of the time just a string
+	key.DocId = p.cacheObj(key.DocId)
+	return key
+}
+
+func (p *IncrementalPruner) cacheTxnId(objId bson.ObjectId) bson.ObjectId {
+	cacheId, exists := p.objCache.Get(objId)
+	if exists {
+		p.stats.ObjCacheHit++
+		return cacheId.(bson.ObjectId)
+	} else {
+		p.stats.ObjCacheMiss++
+		p.objCache.Add(objId, objId)
+		return objId
+	}
+}
+
+func (p *IncrementalPruner) cacheDoc(collection string, docId interface{}, queue []string, docs docMap) docWithQueue {
+	docId = p.cacheObj(docId)
+	key := docKey{Collection: p.cacheString(collection), DocId: docId}
+	for i := range queue {
+		queue[i] = p.cacheString(queue[i])
+	}
+	txns := p.txnsFromTokens(queue)
+	doc := docWithQueue{
+		Id:    docId,
+		Queue: queue,
+		txns:  txns,
+	}
+	p.docCache.Add(key, doc)
+	docs[key] = doc
+	return doc
+}
+
+// DocCache is a type-aware LRU Cache
+type DocCache struct {
+	cache *lru.LRU
+}
+
+func (dc *DocCache) Get(key docKey) (docWithQueue, bool) {
+	res, exists := dc.cache.Get(key)
+	if exists {
+		return res.(docWithQueue), true
+	}
+	return docWithQueue{}, false
+}
+
+func (dc *DocCache) Add(key docKey, doc docWithQueue) {
+	dc.cache.Add(key, doc)
+}
+
+// MissingKeyCache is a simplified LRU cache tracking missing keys
+type MissingKeyCache struct {
+	cache *lru.LRU
+}
+
+func (mkc *MissingKeyCache) KnownMissing(key docKey) {
+	mkc.cache.Add(key, nil)
+}
+
+func (mkc *MissingKeyCache) IsMissing(key docKey) bool {
+	_, present := mkc.cache.Get(key)
+	return present
 }
 
 func (p *IncrementalPruner) updateDocsFromCollections(
@@ -215,9 +315,7 @@ func (p *IncrementalPruner) updateDocsFromCollections(
 		p.stats.CollectionQueries++
 		var doc docWithQueue
 		for iter.Next(&doc) {
-			key := docKey{Collection: collection, DocId: doc.Id}
-			p.docCache.Add(key, doc)
-			docs[key] = doc
+			doc = p.cacheDoc(collection, doc.Id, doc.Queue, docs)
 			p.stats.DocReads++
 			delete(missing, doc.Id)
 		}
@@ -234,6 +332,16 @@ func (p *IncrementalPruner) updateDocsFromCollections(
 	return missingKeys, nil
 }
 
+// Txns returns the Transaction ObjectIds associated with each token.
+// These are cached on the doc object, so that we don't have to convert repeatedly.
+func (p *IncrementalPruner) txnsFromTokens(tokens []string) []bson.ObjectId {
+	txns := make([]bson.ObjectId, len(tokens))
+	for i := range tokens {
+		txns[i] = p.cacheTxnId(txnTokenToId(tokens[i]))
+	}
+	return txns
+}
+
 func (p *IncrementalPruner) updateDocsFromStash(
 	docs docMap,
 	missingKeys map[stashDocKey]struct{},
@@ -246,7 +354,6 @@ func (p *IncrementalPruner) updateDocsFromStash(
 	// referenced. However, the act of adding or remove a document should be cleaning up the txn queue anyway,
 	// which means it is safe to delete the document
 	// For all the other documents, now we need to check txns.stash
-	foundMissingKeys := make(map[stashDocKey]struct{}, len(missingKeys))
 	p.stats.StashQueries++
 	missingSlice := make([]stashDocKey, 0, len(missingKeys))
 	for key := range missingKeys {
@@ -258,21 +365,11 @@ func (p *IncrementalPruner) updateDocsFromStash(
 	iter := query.Iter()
 	var doc stashEntry
 	for iter.Next(&doc) {
-		key := docKey{Collection: doc.Id.Collection, DocId: doc.Id.Id}
-		qDoc := docWithQueue{Id: doc.Id.Id, Queue: doc.Queue}
-		p.docCache.Add(key, qDoc)
-		docs[key] = qDoc
+		p.cacheDoc(doc.Id.Collection, doc.Id.Id, doc.Queue, docs)
 		p.stats.StashReads++
-		foundMissingKeys[doc.Id] = struct{}{}
 	}
 	if err := iter.Close(); err != nil {
 		return errors.Trace(err)
-	}
-	for stashKey := range missingKeys {
-		if _, exists := foundMissingKeys[stashKey]; exists {
-			continue
-		}
-		// Note: we don't track docKeys that are still missing, they are found by the caller when they aren't in docMap
 	}
 	return nil
 }
@@ -299,17 +396,16 @@ func (p *IncrementalPruner) cleanupDocs(
 			doc, ok := foundDocs[docKey]
 			if !ok {
 				p.stats.DocsMissing++
+				p.missingCache.KnownMissing(docKey)
 				if docKey.Collection == "metrics" {
 					// XXX: This is a special case. Metrics are *known* to violate the transaction guarantees
 					// by removing documents directly from the collection, without using a transaction. Even
 					// though they are *created* with transactions... bad metrics, bad dog
 					logger.Tracef("ignoring missing metrics doc: %v", docKey)
-					p.missingCache.Add(docKey, nil)
 				} else if docKey.Collection == "cloudimagemetadata" {
 					// There is an upgrade step in 2.3.4 that bulk deletes all cloudimagemetadata that have particular
 					// attributes, ignoring transactions...
 					logger.Tracef("ignoring missing cloudimagemetadat doc: %v", docKey)
-					p.missingCache.Add(docKey, nil)
 				} else {
 					logger.Warningf("transaction %q referenced document %v but it could not be found",
 						txn.Id.Hex(), docKey)
@@ -371,7 +467,7 @@ func (p *IncrementalPruner) findTxnsToPull(doc docWithQueue, txnsBeingCleaned ma
 	// DocsAlreadyClean:29,103,909
 	// So about 100x more likely to not have anything to do. No need to allocate the slices we won't use.
 	hasChanges := false
-	for _, txnId := range doc.Txns() {
+	for _, txnId := range doc.txns {
 		if _, isCleaned := txnsBeingCleaned[txnId]; isCleaned {
 			hasChanges = true
 			break
@@ -384,10 +480,9 @@ func (p *IncrementalPruner) findTxnsToPull(doc docWithQueue, txnsBeingCleaned ma
 	tokensToPull := make([]string, 0)
 	newQueue := make([]string, 0, len(doc.Queue))
 	newTxns := make([]bson.ObjectId, 0, len(doc.Queue))
-	txnIds := doc.Txns()
 	for i := range doc.Queue {
 		token := doc.Queue[i]
-		txnId := txnIds[i]
+		txnId := doc.txns[i]
 		if _, isCleaned := txnsBeingCleaned[txnId]; isCleaned {
 			tokensToPull = append(tokensToPull, token)
 		} else {
@@ -419,19 +514,6 @@ type docWithQueue struct {
 	Id    interface{}     `bson:"_id"`
 	Queue []string        `bson:"txn-queue"`
 	txns  []bson.ObjectId `bson:"-"`
-}
-
-// Txns returns the Transaction ObjectIds associated with each token.
-// These are cached on the doc object, so that we don't have to convert repeatedly.
-func (dwq *docWithQueue) Txns() []bson.ObjectId {
-	if dwq.txns != nil {
-		return dwq.txns
-	}
-	dwq.txns = make([]bson.ObjectId, len(dwq.Queue))
-	for i := range dwq.Queue {
-		dwq.txns[i] = txnTokenToId(dwq.Queue[i])
-	}
-	return dwq.txns
 }
 
 // these are only the fields of txnDoc that we care about
