@@ -156,8 +156,11 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 		}
 		resCh := make(chan Results, 0)
 		go func() {
+			session := txns.Database.Session.Clone()
+			defer session.Close()
+			localTxns := txns.With(session)
 			batchStats, err := CleanAndPrune(CleanAndPruneArgs{
-				Txns:                     txns,
+				Txns:                     localTxns,
 				TxnsCount:                txnsCount,
 				MaxTime:                  pruneOpts.MaxTime,
 				MaxTransactionsToProcess: pruneOpts.MaxBatchTransactions,
@@ -165,8 +168,11 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 			resCh <- Results{batchStats, err}
 		}()
 		go func() {
+			session := txns.Database.Session.Clone()
+			defer session.Close()
+			localTxns := txns.With(session)
 			batchStats, err := CleanAndPrune(CleanAndPruneArgs{
-				Txns:                     txns,
+				Txns:                     localTxns,
 				TxnsCount:                txnsCount,
 				MaxTime:                  pruneOpts.MaxTime,
 				MaxTransactionsToProcess: pruneOpts.MaxBatchTransactions,
