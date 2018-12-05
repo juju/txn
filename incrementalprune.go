@@ -138,7 +138,7 @@ func (p *IncrementalPruner) startReportingThread(stop <-chan struct{}) {
 			if since > 0 {
 				txnRate = float64(removed) / since
 			}
-			logger.Debugf("pruning has removed %d txns looking at %d docs (%.1f%% in cache)%.0ftxn/s",
+			logger.Debugf("pruning has removed %d txns looking at %d docs (%.1f%% in cache) %.0ftxn/s",
 				removed, totalDocs, cachePercent, txnRate)
 			next = time.After(15 * time.Second)
 		}
@@ -520,7 +520,8 @@ func (p *IncrementalPruner) cleanupDocs(
 					if err != mgo.ErrNotFound {
 						return nil, errors.Trace(err)
 					}
-					// Look in txns.stash
+					// Look in txns.stash. One option here is to just delete the document if there are no more
+					// references in the queue.
 					err := txnsStash.UpdateId(stashDocKey{
 						Collection: docKey.Collection,
 						Id:         docKey.DocId,
