@@ -265,7 +265,6 @@ func startReportingThread(stop <-chan struct{}, progressCh chan ProgressMessage)
 			case msg := <-progressCh:
 				txnsRemoved += msg.TxnsRemoved
 				docsCleaned += msg.DocsCleaned
-				logger.Debugf("progress update: %# v", msg)
 			case <-next:
 				txnRate := 0.0
 				since := time.Since(tStart).Seconds()
@@ -298,13 +297,11 @@ func CleanAndPrune(args CleanAndPruneArgs) (CleanupStats, error) {
 	var anyErr error
 	prune := func(reversed bool) {
 		pruner := NewIncrementalPruner(IncrementalPruneArgs{
-			Txns:            args.Txns,
 			MaxTime:         args.MaxTime,
 			ProgressChannel: progressCh,
 			ReverseOrder:    reversed,
 		})
-		stats, err := pruner.Prune()
-		logger.Criticalf("updating stats: %# v", stats)
+		stats, err := pruner.Prune(args.Txns)
 		mu.Lock()
 		pstats = CombineStats(pstats, stats)
 		if anyErr == nil {
