@@ -24,7 +24,7 @@ const pruneDocCacheSize = 10000
 const missingKeyCacheSize = 2000
 const strCacheSize = 10000
 
-// IncrementalPruner reads the transzaction table incrementally, seeing if it can remove the current set of transactions,
+// IncrementalPruner reads the transaction table incrementally, seeing if it can remove the current set of transactions,
 // and then moves on to newer transactions. It only thinks about 1k txns at a time, because that is the batch size that
 // can be deleted. Instead, it caches documents that it has seen.
 type IncrementalPruner struct {
