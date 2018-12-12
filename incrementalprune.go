@@ -642,7 +642,7 @@ func (p *IncrementalPruner) cleanupDocs(
 				p.missingCache.KnownMissing(docKey)
 				if docKey.Collection == "metrics" {
 					// Note: (jam 2018-12-06) This is a special case. Metrics are
-					// *known* to violate the transaction guarantees. The are
+					// *known* to violate the transaction guarantees. They are
 					// created and updated with the transaction logic, but are
 					// removed in bulk without transaction logic.
 					logger.Tracef("ignoring missing metrics doc: %v", docKey)
