@@ -569,6 +569,7 @@ func (p *IncrementalPruner) cleanupDoc(
 	collection string,
 	doc docWithQueue,
 	txnsBeingCleaned map[bson.ObjectId]struct{},
+	foundDocs docMap,
 	db *mgo.Database,
 	txnsStash *mgo.Collection,
 ) (bool, error) {
@@ -609,6 +610,7 @@ func (p *IncrementalPruner) cleanupDoc(
 	doc.Queue = newQueue
 	doc.txns = newTxnIds
 	// Update the known Queue of the document, since we cleaned it.
+	foundDocs[dKey] = doc
 	p.docCache.Add(dKey, doc)
 	return true, nil
 }
@@ -647,7 +649,7 @@ func (p *IncrementalPruner) cleanupDocs(
 				}
 				continue
 			}
-			updated, err := p.cleanupDoc(docKey.Collection, doc, txnsBeingCleaned, db, txnsStash)
+			updated, err := p.cleanupDoc(docKey.Collection, doc, txnsBeingCleaned, foundDocs, db, txnsStash)
 			if err != nil {
 				return errors.Trace(err)
 			}

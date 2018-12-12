@@ -6,6 +6,7 @@ package txn
 import (
 	"time"
 
+	"github.com/juju/errors"
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
@@ -134,6 +135,44 @@ func (s *IncrementalPruneSuite) TestPruneIgnoresRecentTxns(c *gc.C) {
 	c.Check(count, gc.Equals, 1)
 	c.Assert(s.db.C("docs").FindId("1").One(&doc), jc.ErrorIsNil)
 	c.Check(doc.Queue, gc.HasLen, 1)
+}
+
+func (s *IncrementalPruneSuite) TestPruneCleansUpStash(c *gc.C) {
+	s.runTxn(c, txn.Op{
+		C:      "docs",
+		Id:     "1",
+		Insert: bson.M{"key": "value"},
+	})
+	s.runTxn(c, txn.Op{
+		C:      "docs",
+		Id:     "1",
+		Remove: true,
+	})
+	count, err := s.txns.Count()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 2)
+	var doc docWithQueue
+	// The doc should be in the stash
+	c.Assert(errors.Cause(s.db.C("docs").FindId("1").One(&doc)), gc.Equals, mgo.ErrNotFound)
+	txnsStash := s.db.C("txns.stash")
+	stashId := bson.D{{"c", "docs"}, {"id", "1"}}
+	c.Assert(txnsStash.FindId(stashId).One(&doc), jc.ErrorIsNil)
+	c.Check(doc.Queue, gc.HasLen, 1)
+	pruner := NewIncrementalPruner(IncrementalPruneArgs{})
+	stats, err := pruner.Prune(s.txns)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(stats.TxnsRemoved, gc.Equals, int64(2))
+	c.Check(stats.DocReads, gc.Equals, int64(0))
+	c.Check(stats.DocQueuesCleaned, gc.Equals, int64(1))
+	c.Check(stats.DocTokensCleaned, gc.Equals, int64(1))
+	c.Check(stats.DocsMissing, gc.Equals, int64(0))
+	c.Check(stats.StashDocReads, gc.Equals, int64(1))
+	c.Check(stats.StashDocsRemoved, gc.Equals, int64(1))
+	err = txnsStash.FindId(stashId).One(&doc)
+	c.Assert(errors.Cause(err), gc.Equals, mgo.ErrNotFound)
+	count, err = s.txns.Count()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 0)
 }
 
 type TxnSuite struct {
