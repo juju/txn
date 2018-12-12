@@ -4,6 +4,7 @@
 package txn
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/juju/errors"
@@ -168,6 +169,44 @@ func (s *IncrementalPruneSuite) TestPruneCleansUpStash(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 	c.Check(count, gc.Equals, 0)
 	count, err = txnsStash.Count()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 0)
+}
+
+func (s *IncrementalPruneSuite) TestPruneDoesntRereadCachedDocs(c *gc.C) {
+	// We create a lot of trnansactions updating the same doc
+	s.runTxn(c, txn.Op{
+		C:      "docs",
+		Id:     "1",
+		Insert: bson.M{"key": "value"},
+	})
+	for i := 0; i < 20; i++ {
+		s.runTxn(c, txn.Op{
+			C:      "docs",
+			Id:     "1",
+			Update: bson.M{"$set": bson.M{"key": fmt.Sprint(i)}},
+		})
+	}
+	count, err := s.txns.Count()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 21)
+	var doc docWithQueue
+	// The doc should be in the stash
+	c.Assert(errors.Cause(s.db.C("docs").FindId("1").One(&doc)), jc.ErrorIsNil)
+	c.Check(doc.Queue, gc.HasLen, 1)
+	pruner := NewIncrementalPruner(IncrementalPruneArgs{})
+	stats, err := pruner.Prune(s.txns)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(stats.TxnsRemoved, gc.Equals, int64(21))
+	c.Check(stats.DocReads, gc.Equals, int64(1))
+	c.Check(stats.DocQueuesCleaned, gc.Equals, int64(1))
+	c.Check(stats.DocTokensCleaned, gc.Equals, int64(1))
+	c.Check(stats.DocsMissing, gc.Equals, int64(0))
+	c.Check(stats.StashDocReads, gc.Equals, int64(0))
+	c.Check(stats.StashDocsRemoved, gc.Equals, int64(0))
+	c.Assert(errors.Cause(s.db.C("docs").FindId("1").One(&doc)), jc.ErrorIsNil)
+	c.Check(doc.Queue, gc.HasLen, 0)
+	count, err = s.txns.Count()
 	c.Assert(err, jc.ErrorIsNil)
 	c.Check(count, gc.Equals, 0)
 }
