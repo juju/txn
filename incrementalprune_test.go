@@ -75,17 +75,11 @@ func (s *IncrementalPruneSuite) TestPruneIgnoresPendingTransactions(c *gc.C) {
 		Id:     "1",
 		Insert: bson.M{"key": "value"},
 	})
-	txn.SetChaos(txn.Chaos{
-		KillChance: 1,
-		Breakpoint: "set-applying",
-	})
-	txnId := bson.NewObjectId()
-	err := s.runner.Run([]txn.Op{{
+	s.runInterruptedTxn(c, "set-applying", txn.Op{
 		C:      "docs",
 		Id:     "1",
 		Update: bson.M{"$set": bson.M{"key": "newvalue"}},
-	}}, txnId, nil)
-	c.Check(err, gc.Equals, txn.ErrChaos)
+	})
 	count, err := s.txns.Count()
 	c.Assert(err, jc.ErrorIsNil)
 	c.Check(count, gc.Equals, 2)
@@ -173,6 +167,59 @@ func (s *IncrementalPruneSuite) TestPruneCleansUpStash(c *gc.C) {
 	count, err = s.txns.Count()
 	c.Assert(err, jc.ErrorIsNil)
 	c.Check(count, gc.Equals, 0)
+	count, err = txnsStash.Count()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 0)
+}
+
+func (s *IncrementalPruneSuite) TestPruneLeavesIncompleteStashAlone(c *gc.C) {
+	s.runTxn(c, txn.Op{
+		C:      "docs",
+		Id:     "1",
+		Insert: bson.M{"key": "value"},
+	})
+	s.runTxn(c, txn.Op{
+		C:      "docs",
+		Id:     "1",
+		Remove: true,
+	})
+	s.runInterruptedTxn(c, "set-applying", txn.Op{
+		C:      "docs",
+		Id:     "1",
+		Insert: bson.M{"key": "new-value"},
+	})
+	// Inserting the document again will try to restore it from the stash, but
+	// leave a pending txn
+	count, err := s.txns.Count()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 3)
+	var doc docWithQueue
+	// The doc should be in the stash
+	c.Assert(errors.Cause(s.db.C("docs").FindId("1").One(&doc)), gc.Equals, mgo.ErrNotFound)
+	txnsStash := s.db.C("txns.stash")
+	stashId := bson.D{{"c", "docs"}, {"id", "1"}}
+	c.Assert(txnsStash.FindId(stashId).One(&doc), jc.ErrorIsNil)
+	c.Check(doc.Queue, gc.HasLen, 2)
+	pruner := NewIncrementalPruner(IncrementalPruneArgs{})
+	stats, err := pruner.Prune(s.txns)
+	c.Assert(err, jc.ErrorIsNil)
+	// We can remove the finished txns, but not the incomplete one, and we must
+	// leave the doc in txns.stash
+	c.Check(stats.TxnsRemoved, gc.Equals, int64(2))
+	c.Check(stats.DocReads, gc.Equals, int64(0))
+	c.Check(stats.DocQueuesCleaned, gc.Equals, int64(1))
+	c.Check(stats.DocTokensCleaned, gc.Equals, int64(1))
+	c.Check(stats.DocsMissing, gc.Equals, int64(0))
+	c.Check(stats.StashDocReads, gc.Equals, int64(1))
+	c.Check(stats.StashDocsRemoved, gc.Equals, int64(0))
+	c.Assert(txnsStash.FindId(stashId).One(&doc), jc.ErrorIsNil)
+	c.Check(doc.Queue, gc.HasLen, 1)
+	count, err = s.txns.Count()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 1)
+	count, err = txnsStash.Count()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 1)
 }
 
 type TxnSuite struct {
@@ -201,6 +248,19 @@ func (s *TxnSuite) runTxn(c *gc.C, ops ...txn.Op) bson.ObjectId {
 	txnId := bson.NewObjectId()
 	err := s.runner.Run(ops, txnId, nil)
 	c.Assert(err, jc.ErrorIsNil)
+	return txnId
+}
+
+// runInterruptedTxn starts a txn but uses Chaos to force that txn to not complete
+func (s *TxnSuite) runInterruptedTxn(c *gc.C, breakpoint string, ops ...txn.Op) bson.ObjectId {
+	txnId := bson.NewObjectId()
+	txn.SetChaos(txn.Chaos{
+		KillChance: 1,
+		Breakpoint: breakpoint,
+	})
+	err := s.runner.Run(ops, txnId, nil)
+	c.Assert(err, gc.Equals, txn.ErrChaos)
+	txn.SetChaos(txn.Chaos{})
 	return txnId
 }
 

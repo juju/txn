@@ -293,6 +293,8 @@ func checkTime(toAdd *time.Duration) func() {
 
 func (p *IncrementalPruner) cleanupStash(txnsStash *mgo.Collection) error {
 	tStart := time.Now()
+	// TODO(jam):  2018-12-12 Do we need to worry about the txn-remove/txn-insert
+	//  attributes?
 	info, err := txnsStash.RemoveAll(
 		bson.M{"txn-queue.0": bson.M{"$exists": 0}},
 	)
