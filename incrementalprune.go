@@ -77,9 +77,9 @@ type IncrementalPruneArgs struct {
 // PrunerStats collects statistics about how the prune progressed
 type PrunerStats struct {
 	CacheLookupTime    time.Duration
+	DocReadTime        time.Duration
 	DocLookupTime      time.Duration
 	DocCleanupTime     time.Duration
-	DocReadTime        time.Duration
 	StashLookupTime    time.Duration
 	StashRemoveTime    time.Duration
 	TxnReadTime        time.Duration
@@ -99,8 +99,8 @@ type PrunerStats struct {
 	DocsAlreadyClean   int64
 	TxnsRemoved        int64
 	TxnsNotRemoved     int64
-	ObjCacheHits       int64
-	ObjCacheMisses     int64
+	StrCacheHits       int64
+	StrCacheMisses     int64
 }
 
 func (ps PrunerStats) String() string {
@@ -147,6 +147,7 @@ func (ps PrunerStats) String() string {
 	return strings.Join(resultStrs, "\n")
 }
 
+// CombineStats aggregates two stats into a single value
 func CombineStats(a, b PrunerStats) PrunerStats {
 	return PrunerStats{
 		CacheLookupTime:    a.CacheLookupTime + b.CacheLookupTime,
@@ -172,8 +173,8 @@ func CombineStats(a, b PrunerStats) PrunerStats {
 		DocsAlreadyClean:   a.DocsAlreadyClean + b.DocsAlreadyClean,
 		TxnsRemoved:        a.TxnsRemoved + b.TxnsRemoved,
 		TxnsNotRemoved:     a.TxnsNotRemoved + b.TxnsNotRemoved,
-		ObjCacheHits:       a.ObjCacheHits + b.ObjCacheHits,
-		ObjCacheMisses:     a.ObjCacheMisses + b.ObjCacheMisses,
+		StrCacheHits:       a.StrCacheHits + b.StrCacheHits,
+		StrCacheMisses:     a.StrCacheMisses + b.StrCacheMisses,
 	}
 }
 
@@ -251,8 +252,8 @@ func (p *IncrementalPruner) Prune(txns *mgo.Collection) (PrunerStats, error) {
 		}
 	}
 	hits := p.strCache.HitCounts()
-	p.stats.ObjCacheHits = hits.Hit
-	p.stats.ObjCacheMisses = hits.Miss
+	p.stats.StrCacheHits = hits.Hit
+	p.stats.StrCacheMisses = hits.Miss
 	if firstErr == nil {
 		firstErr = p.cleanupStash(txnsStash)
 	}

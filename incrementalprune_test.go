@@ -20,8 +20,120 @@ type IncrementalPruneSuite struct {
 	TxnSuite
 }
 
-func (*IncrementalPruneSuite) TestSimplePrune(c *gc.C) {
-	c.Check(1, gc.Equals, 1)
+func (s *IncrementalPruneSuite) TestPruneAlsoCleans(c *gc.C) {
+	s.runTxn(c, txn.Op{
+		C:      "docs",
+		Id:     "1",
+		Insert: bson.M{"key": "value"},
+	})
+	var doc docWithQueue
+	c.Assert(s.db.C("docs").FindId("1").One(&doc), jc.ErrorIsNil)
+	c.Check(doc.Queue, gc.HasLen, 1)
+	pruner := NewIncrementalPruner(IncrementalPruneArgs{})
+	stats, err := pruner.Prune(s.txns)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(stats.TxnsRemoved, gc.Equals, int64(1))
+	c.Check(stats.DocReads, gc.Equals, int64(1))
+	c.Check(stats.DocQueuesCleaned, gc.Equals, int64(1))
+	c.Check(stats.DocTokensCleaned, gc.Equals, int64(1))
+	// We should have cleaned the document, as well as deleting the transaction
+	c.Assert(s.db.C("docs").FindId("1").One(&doc), jc.ErrorIsNil)
+	c.Check(doc.Queue, gc.DeepEquals, []string{})
+	count, err := s.txns.Count()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 0)
+}
+
+func (s *IncrementalPruneSuite) TestPruneHandlesMissingDocs(c *gc.C) {
+	s.runTxn(c, txn.Op{
+		C:      "docs",
+		Id:     "1",
+		Insert: bson.M{"key": "value"},
+	})
+	// Now that we have the doc, we forcefully delete it
+	res, err := s.db.C("docs").RemoveAll(nil)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(res.Removed, gc.Equals, 1)
+	pruner := NewIncrementalPruner(IncrementalPruneArgs{})
+	stats, err := pruner.Prune(s.txns)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(stats.TxnsRemoved, gc.Equals, int64(1))
+	c.Check(stats.DocReads, gc.Equals, int64(0))
+	c.Check(stats.DocQueuesCleaned, gc.Equals, int64(0))
+	c.Check(stats.DocTokensCleaned, gc.Equals, int64(0))
+	c.Check(stats.DocsMissing, gc.Equals, int64(1))
+	// The txn gets cleaned up since the docs are missing, thus nothing refers to it.
+	count, err := s.txns.Count()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 0)
+}
+
+func (s *IncrementalPruneSuite) TestPruneIgnoresPendingTransactions(c *gc.C) {
+	s.runTxn(c, txn.Op{
+		C:      "docs",
+		Id:     "1",
+		Insert: bson.M{"key": "value"},
+	})
+	txn.SetChaos(txn.Chaos{
+		KillChance: 1,
+		Breakpoint: "set-applying",
+	})
+	txnId := bson.NewObjectId()
+	err := s.runner.Run([]txn.Op{{
+		C:      "docs",
+		Id:     "1",
+		Update: bson.M{"$set": bson.M{"key": "newvalue"}},
+	}}, txnId, nil)
+	c.Check(err, gc.Equals, txn.ErrChaos)
+	count, err := s.txns.Count()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 2)
+	var doc docWithQueue
+	c.Assert(s.db.C("docs").FindId("1").One(&doc), jc.ErrorIsNil)
+	c.Check(doc.Queue, gc.HasLen, 2)
+	pruner := NewIncrementalPruner(IncrementalPruneArgs{})
+	stats, err := pruner.Prune(s.txns)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(stats.TxnsRemoved, gc.Equals, int64(1))
+	c.Check(stats.DocReads, gc.Equals, int64(1))
+	c.Check(stats.DocQueuesCleaned, gc.Equals, int64(1))
+	c.Check(stats.DocTokensCleaned, gc.Equals, int64(1))
+	c.Check(stats.DocsMissing, gc.Equals, int64(0))
+	count, err = s.txns.Count()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 1)
+	c.Assert(s.db.C("docs").FindId("1").One(&doc), jc.ErrorIsNil)
+	c.Check(doc.Queue, gc.HasLen, 1)
+}
+
+func (s *IncrementalPruneSuite) TestPruneIgnoresRecentTxns(c *gc.C) {
+	s.runTxn(c, txn.Op{
+		C:      "docs",
+		Id:     "1",
+		Insert: bson.M{"key": "value"},
+	})
+	count, err := s.txns.Count()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 1)
+	var doc docWithQueue
+	c.Assert(s.db.C("docs").FindId("1").One(&doc), jc.ErrorIsNil)
+	c.Check(doc.Queue, gc.HasLen, 1)
+	pruner := NewIncrementalPruner(IncrementalPruneArgs{
+		MaxTime: time.Now().Add(-time.Hour),
+	})
+	// Nothing is touched because the txn is newer than 1 hour old
+	stats, err := pruner.Prune(s.txns)
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(stats.TxnsRemoved, gc.Equals, int64(0))
+	c.Check(stats.DocReads, gc.Equals, int64(0))
+	c.Check(stats.DocQueuesCleaned, gc.Equals, int64(0))
+	c.Check(stats.DocTokensCleaned, gc.Equals, int64(0))
+	c.Check(stats.DocsMissing, gc.Equals, int64(0))
+	count, err = s.txns.Count()
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(count, gc.Equals, 1)
+	c.Assert(s.db.C("docs").FindId("1").One(&doc), jc.ErrorIsNil)
+	c.Check(doc.Queue, gc.HasLen, 1)
 }
 
 type TxnSuite struct {
@@ -64,9 +176,9 @@ func (*PrunerStatsSuite) TestBaseString(c *gc.C) {
 	c.Check(v1.String(), gc.Equals, `
 PrunerStats(
      CacheLookupTime: 0.000
+         DocReadTime: 0.000
        DocLookupTime: 0.000
       DocCleanupTime: 0.000
-         DocReadTime: 0.000
      StashLookupTime: 0.000
      StashRemoveTime: 0.000
          TxnReadTime: 0.000
@@ -86,8 +198,8 @@ PrunerStats(
     DocsAlreadyClean: 0
          TxnsRemoved: 0
       TxnsNotRemoved: 0
-        ObjCacheHits: 0
-      ObjCacheMisses: 0
+        StrCacheHits: 0
+      StrCacheMisses: 0
 )`[1:])
 }
 
@@ -100,9 +212,9 @@ func (*PrunerStatsSuite) TestAlignedTimes(c *gc.C) {
 	c.Check(v1.String(), gc.Equals, `
 PrunerStats(
      CacheLookupTime: 12.345
+         DocReadTime: 23.457
        DocLookupTime:  0.000
       DocCleanupTime:  0.000
-         DocReadTime: 23.457
      StashLookupTime:  0.200
      StashRemoveTime:  0.000
          TxnReadTime:  0.000
@@ -122,8 +234,8 @@ PrunerStats(
     DocsAlreadyClean: 0
          TxnsRemoved: 0
       TxnsNotRemoved: 0
-        ObjCacheHits: 0
-      ObjCacheMisses: 0
+        StrCacheHits: 0
+      StrCacheMisses: 0
 )`[1:])
 }
 
@@ -135,9 +247,9 @@ func (*PrunerStatsSuite) TestAlignedValues(c *gc.C) {
 	c.Check(v1.String(), gc.Equals, `
 PrunerStats(
      CacheLookupTime: 0.000
+         DocReadTime: 0.000
        DocLookupTime: 0.000
       DocCleanupTime: 0.000
-         DocReadTime: 0.000
      StashLookupTime: 0.000
      StashRemoveTime: 0.000
          TxnReadTime: 0.000
@@ -157,7 +269,7 @@ PrunerStats(
     DocsAlreadyClean:     0
          TxnsRemoved:     0
       TxnsNotRemoved:     0
-        ObjCacheHits:     0
-      ObjCacheMisses:     0
+        StrCacheHits:     0
+      StrCacheMisses:     0
 )`[1:])
 }
