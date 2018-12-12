@@ -4,12 +4,14 @@
 package txn
 
 import (
+	"fmt"
+	"reflect"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/juju/errors"
 	"github.com/juju/lru"
-	"github.com/kr/pretty"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 )
@@ -99,6 +101,50 @@ type PrunerStats struct {
 	TxnsNotRemoved     int64
 	ObjCacheHits       int64
 	ObjCacheMisses     int64
+}
+
+func (ps PrunerStats) String() string {
+	durationType := reflect.TypeOf(time.Second)
+	v := reflect.ValueOf(ps)
+	t := v.Type()
+	longestAttrLength := 1
+	longestValueLength := 1
+	longestTimeLength := 1
+	values := make([]string, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		attr := t.Field(i)
+		if len(attr.Name) > longestAttrLength {
+			longestAttrLength = len(attr.Name)
+		}
+		val := v.Field(i)
+		var valStr string
+		if val.Type() == durationType {
+			valStr = fmt.Sprintf("%.3f", val.Interface().(time.Duration).Round(time.Millisecond).Seconds())
+			if len(valStr) > longestTimeLength {
+				longestTimeLength = len(valStr)
+			}
+		} else {
+			valStr = fmt.Sprint(val.Interface())
+			if len(valStr) > longestValueLength {
+				longestValueLength = len(valStr)
+			}
+		}
+		values[i] = valStr
+	}
+	resultStrs := []string{
+		"PrunerStats(",
+	}
+	for i := 0; i < t.NumField(); i++ {
+		fieldWidth := longestValueLength
+		field := t.Field(i)
+		if field.Type == durationType {
+			fieldWidth = longestTimeLength
+		}
+		next := fmt.Sprintf("  %*s: %*s", longestAttrLength, field.Name, fieldWidth, values[i])
+		resultStrs = append(resultStrs, next)
+	}
+	resultStrs = append(resultStrs, ")")
+	return strings.Join(resultStrs, "\n")
 }
 
 func CombineStats(a, b PrunerStats) PrunerStats {
@@ -210,7 +256,7 @@ func (p *IncrementalPruner) Prune(txns *mgo.Collection) (PrunerStats, error) {
 	if firstErr == nil {
 		firstErr = p.cleanupStash(txnsStash)
 	}
-	logger.Debugf("pruneStats: %# v", pretty.Sprint(p.stats))
+	logger.Debugf("%s", p.stats)
 	return p.stats, errors.Trace(firstErr)
 }
 
