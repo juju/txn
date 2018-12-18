@@ -35,6 +35,20 @@ const (
 	// this many new transactions, even if pruneFactor hasn't been satisfied
 	defaultMaxNewTransactions = 100000
 
+	// defaultSmallBatchTransaction count represents a tradeoff of how many
+	// transactions we will read, and then lookup all the docs that they
+	// reference as a group. Increasing this should improve the efficiency
+	// of document reading, at a cost of larger batches. Empirically, 1000
+	// seems to be a good balance. A large batch also represents a larger
+	// 'Remove' query against the txns collection.
+	defaultSmallBatchTransactionCount = 1000
+
+	// defaultBatchTransactionSleepTime represents approximately a 10% cycle time.
+	// generally a batch of 1000 txns takes around 100ms to process. By sleeping
+	// for 10ms, that slows us down by ~10%, but means that other queries have
+	// opportunities to get queries in.
+	defaultBatchTransactionSleepTime = 10 * time.Millisecond
+
 	// maxBulkOps defines the maximum number of operations in a bulk
 	// operation.
 	maxBulkOps = 1000
@@ -84,6 +98,12 @@ func validatePruneOptions(pruneOptions *PruneOptions) {
 	}
 	if pruneOptions.MaxBatches <= 0 {
 		pruneOptions.MaxBatches = 1
+	}
+	if pruneOptions.BatchTransactionSleepTime < 0 {
+		pruneOptions.BatchTransactionSleepTime = defaultBatchTransactionSleepTime
+	}
+	if pruneOptions.SmallBatchTransactionCount < pruneMinTxnBatchSize {
+		pruneOptions.SmallBatchTransactionCount = defaultSmallBatchTransactionCount
 	}
 }
 
@@ -158,6 +178,8 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 			TxnsCount:                txnsCount,
 			MaxTime:                  pruneOpts.MaxTime,
 			MaxTransactionsToProcess: pruneOpts.MaxBatchTransactions,
+			TxnBatchSize:             pruneOpts.SmallBatchTransactionCount,
+			TxnBatchSleepTime:        pruneOpts.BatchTransactionSleepTime,
 		})
 		if err != nil {
 			return errors.Trace(err)

@@ -87,6 +87,17 @@ type PruneOptions struct {
 	// MaxBatches is the maximum number of passes we will attempt. 0 or
 	// negative values are treated as do a single pass.
 	MaxBatches int
+
+	// SmallBatchTransactionCount is the number of transactions to read at a time.
+	// A value of 1000 seems to be a good balance between how much time we spend
+	// processing, and how many documents we evaluate at one time. (a value of
+	// 100 empirically processes slower, and a value of 10,000 wasn't any faster)
+	SmallBatchTransactionCount int
+
+	// BatchTransactionSleepTime is an amount of time that we will sleep between
+	// processing batches of transactions. This allows us to avoid excess load
+	// on the system while pruning.
+	BatchTransactionSleepTime time.Duration
 }
 
 // Runner instances applies operations to collections in a database.
