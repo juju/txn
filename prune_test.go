@@ -35,10 +35,12 @@ func (s *PruneSuite) maybePruneWithTimestamp(c *gc.C, pruneFactor float32, times
 		Clock:                     testclock.NewClock(time.Now()),
 	})
 	err := r.MaybePruneTransactions(jujutxn.PruneOptions{
-		PruneFactor:        pruneFactor,
-		MinNewTransactions: 1,
-		MaxNewTransactions: 1000,
-		MaxTime:            timestamp,
+		PruneFactor:                pruneFactor,
+		MinNewTransactions:         1,
+		MaxNewTransactions:         1000,
+		MaxTime:                    timestamp,
+		SmallBatchTransactionCount: 1000,
+		BatchTransactionSleepTime:  0 * time.Millisecond,
 	})
 	c.Assert(err, jc.ErrorIsNil)
 }

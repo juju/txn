@@ -87,6 +87,17 @@ type PruneOptions struct {
 	// MaxBatches is the maximum number of passes we will attempt. 0 or
 	// negative values are treated as do a single pass.
 	MaxBatches int
+
+	// SmallBatchTransactionCount is the number of transactions to read at a time.
+	// A value of 1000 seems to be a good balance between how much time we spend
+	// processing, and how many documents we evaluate at one time. (a value of
+	// 100 empirically processes slower, and a value of 10,000 wasn't any faster)
+	SmallBatchTransactionCount int
+
+	// BatchTransactionSleepTime is an amount of time that we will sleep between
+	// processing batches of transactions. This allows us to avoid excess load
+	// on the system while pruning.
+	BatchTransactionSleepTime time.Duration
 }
 
 // Runner instances applies operations to collections in a database.
@@ -118,13 +129,20 @@ type txnRunner interface {
 	ResumeAll() error
 }
 
+// Clock is a simplified form of juju/clock.Clock, since we don't need all the methods
+// and this allows us to be compatible with both juju/clock.Clock and juju/utils/clock.Clock
+type Clock interface {
+	// Now returns the current clock time.
+	Now() time.Time
+}
+
 type transactionRunner struct {
 	db                        *mgo.Database
 	transactionCollectionName string
 	changeLogName             string
 	testHooks                 chan ([]TestHook)
 	runTransactionObserver    func(ObservedTransaction)
-	clock                     clock.Clock
+	clock                     Clock
 
 	newRunner func() txnRunner
 }
@@ -165,7 +183,7 @@ type RunnerParams struct {
 
 	// Clock is an optional clock to use. If Clock is nil, clock.WallClock will
 	// be used.
-	Clock clock.Clock
+	Clock Clock
 }
 
 // NewRunner returns a Runner which runs transactions for the database specified in params.

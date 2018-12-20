@@ -35,6 +35,20 @@ const (
 	// this many new transactions, even if pruneFactor hasn't been satisfied
 	defaultMaxNewTransactions = 100000
 
+	// defaultSmallBatchTransaction count represents a tradeoff of how many
+	// transactions we will read, and then lookup all the docs that they
+	// reference as a group. Increasing this should improve the efficiency
+	// of document reading, at a cost of larger batches. Empirically, 1000
+	// seems to be a good balance. A large batch also represents a larger
+	// 'Remove' query against the txns collection.
+	defaultSmallBatchTransactionCount = 1000
+
+	// defaultBatchTransactionSleepTime represents approximately a 10% cycle time.
+	// generally a batch of 1000 txns takes around 100ms to process. By sleeping
+	// for 10ms, that slows us down by ~10%, but means that other queries have
+	// opportunities to get queries in.
+	defaultBatchTransactionSleepTime = 10 * time.Millisecond
+
 	// maxBulkOps defines the maximum number of operations in a bulk
 	// operation.
 	maxBulkOps = 1000
@@ -84,6 +98,12 @@ func validatePruneOptions(pruneOptions *PruneOptions) {
 	}
 	if pruneOptions.MaxBatches <= 0 {
 		pruneOptions.MaxBatches = 1
+	}
+	if pruneOptions.BatchTransactionSleepTime < 0 {
+		pruneOptions.BatchTransactionSleepTime = defaultBatchTransactionSleepTime
+	}
+	if pruneOptions.SmallBatchTransactionCount < pruneMinTxnBatchSize {
+		pruneOptions.SmallBatchTransactionCount = defaultSmallBatchTransactionCount
 	}
 }
 
@@ -138,57 +158,32 @@ func maybePrune(db *mgo.Database, txnsName string, pruneOpts PruneOptions) error
 		return fmt.Errorf("failed to retrieve starting %q count: %v", txnsStashName, err)
 	}
 
-	var stats CleanupStats
-	var txnsCountAfter int
-	var stashDocsAfter int
 	txnsCountBefore := txnsCount
-	batchCount := 0
-	wantsRetry := false
-	for ; batchCount < pruneOpts.MaxBatches; batchCount++ {
-		// Note: jam 2018-08-16 If there are lots of txns that cannot be
-		// pruned, then batch size will mean we end up looking at the same
-		// transactions repeatedly. However, as long as the queries prefer
-		// old transactions, the chances that those are stale is low.
-		batchStarted := time.Now()
-		session := txns.Database.Session.Copy()
-		defer session.Close()
-		localTxns := txns.With(session)
-		batchStats, err := CleanAndPrune(CleanAndPruneArgs{
-			Txns:                     localTxns,
-			TxnsCount:                txnsCount,
-			MaxTime:                  pruneOpts.MaxTime,
-			MaxTransactionsToProcess: pruneOpts.MaxBatchTransactions,
-		})
-		if err != nil {
-			return errors.Trace(err)
-		}
-		txnsCountAfter, err = txns.Count()
-		if err != nil {
-			return fmt.Errorf("failed to retrieve final txns count: %v", err)
-		}
-		stashDocsAfter, err = txnsStash.Count()
-		if err != nil {
-			return fmt.Errorf("failed to retrieve final %q count: %v", txnsStashName, err)
-		}
-		stats.CollectionsInspected += batchStats.CollectionsInspected
-		stats.DocsInspected += batchStats.DocsInspected
-		stats.DocsCleaned += batchStats.DocsCleaned
-		stats.StashDocumentsRemoved += batchStats.StashDocumentsRemoved
-		stats.TransactionsRemoved += batchStats.TransactionsRemoved
-		wantsRetry = batchStats.ShouldRetry
-		if !batchStats.ShouldRetry {
-			break
-		}
-		logger.Infof("txn batch pruned in %v. txns now: %d, inspected %d collections, %d docs (%d cleaned)\n   removed %d stash docs and %d txn docs",
-			time.Since(batchStarted), txnsCountAfter, stats.CollectionsInspected, stats.DocsInspected, stats.DocsCleaned, stats.StashDocumentsRemoved, stats.TransactionsRemoved)
-		txnsCount = txnsCountAfter
+	session := txns.Database.Session.Copy()
+	defer session.Close()
+	localTxns := txns.With(session)
+	stats, err := CleanAndPrune(CleanAndPruneArgs{
+		Txns:                     localTxns,
+		TxnsCount:                txnsCount,
+		MaxTime:                  pruneOpts.MaxTime,
+		MaxTransactionsToProcess: pruneOpts.MaxBatchTransactions,
+		TxnBatchSize:             pruneOpts.SmallBatchTransactionCount,
+		TxnBatchSleepTime:        pruneOpts.BatchTransactionSleepTime,
+	})
+	if err != nil {
+		return errors.Trace(err)
+	}
+	txnsCountAfter, err := txns.Count()
+	if err != nil {
+		return fmt.Errorf("failed to retrieve final txns count: %v", err)
+	}
+	stashDocsAfter, err := txnsStash.Count()
+	if err != nil {
+		return fmt.Errorf("failed to retrieve final %q count: %v", txnsStashName, err)
 	}
 	elapsed := time.Since(started)
-	if wantsRetry {
-		logger.Warningf("after %d passes, we still think there are more transactions to be pruned", batchCount)
-	}
-	logger.Infof("txn pruning complete after %v in %d batches. txns now: %d, inspected %d collections, %d docs (%d cleaned)\n   removed %d stash docs and %d txn docs",
-		elapsed, batchCount, txnsCountAfter, stats.CollectionsInspected, stats.DocsInspected, stats.DocsCleaned, stats.StashDocumentsRemoved, stats.TransactionsRemoved)
+	logger.Infof("txn pruning complete after %v. txns now: %d, inspected %d collections, %d docs (%d cleaned)\n   removed %d stash docs and %d txn docs",
+		elapsed, txnsCountAfter, stats.CollectionsInspected, stats.DocsInspected, stats.DocsCleaned, stats.StashDocumentsRemoved, stats.TransactionsRemoved)
 	completed := time.Now()
 	return writePruneTxnsCount(txnsPrune, started, completed, txnsCountBefore, txnsCountAfter,
 		stashDocsBefore, stashDocsAfter)
@@ -328,9 +323,9 @@ func CleanAndPrune(args CleanAndPruneArgs) (CleanupStats, error) {
 			TxnBatchSize:      args.TxnBatchSize,
 			TxnBatchSleepTime: args.TxnBatchSleepTime,
 		})
-		stats, err := pruner.Prune(args.Txns)
+		thisPstats, err := pruner.Prune(args.Txns)
 		mu.Lock()
-		pstats = CombineStats(pstats, stats)
+		pstats = CombineStats(pstats, thisPstats)
 		if anyErr == nil {
 			anyErr = errors.Trace(err)
 		} else if err != nil {
@@ -359,15 +354,8 @@ func CleanAndPrune(args CleanAndPruneArgs) (CleanupStats, error) {
 	stats.DocsCleaned = int(pstats.DocQueuesCleaned)
 	stats.StashDocumentsRemoved = int(pstats.StashDocsRemoved)
 	stats.DocsInspected = int(pstats.DocCacheMisses + pstats.DocCacheHits)
+	stats.CollectionsInspected = int(pstats.CollectionQueries)
 	return stats, nil
-}
-
-func getOracle(args CleanAndPruneArgs, maxMemoryTxns int, maxTxns int) (Oracle, func(), error) {
-	// If we don't have very many transactions, just use the in-memory version
-	if args.TxnsCount < maxMemoryTxns {
-		return NewMemOracle(args.Txns, args.MaxTime, maxTxns)
-	}
-	return NewDBOracle(args.Txns, args.MaxTime, maxTxns)
 }
 
 // getPruneLastTxnsCount will return how many documents were in 'txns' the
@@ -429,128 +417,6 @@ func txnsPruneC(txnsName string) string {
 	return txnsName + ".prune"
 }
 
-// PruneTxns removes applied and aborted entries from the txns
-// collection that are no longer referenced by any document.
-//
-// Warning: this is a fairly heavyweight activity and therefore should
-// be done infrequently.
-//
-// PruneTxns is the low-level pruning function that does the actual
-// pruning work. It only exposed for external utilities to
-// call. Typical usage should be via Runner.MaybePruneTransactions
-// which wraps PruneTxns, only calling it when really necessary.
-//
-// TODO(mjs) - this knows way too much about mgo/txn's internals and
-// with a bit of luck something like this will one day be part of
-// mgo/txn.
-func PruneTxns(oracle Oracle, txns *mgo.Collection, stats *CleanupStats) error {
-	count := oracle.Count()
-	logger.Debugf("%d completed txns found", count)
-
-	db := txns.Database
-	collNames, err := db.CollectionNames()
-	if err != nil {
-		return fmt.Errorf("reading collection names: %v", err)
-	}
-	collNames = txnCollections(collNames, txns.Name)
-	logger.Debugf("%d collections with txns to examine", len(collNames))
-
-	// Now remove the txn ids referenced by any document in any
-	// txn-using collection from the set of known txn ids.
-	//
-	// Working the other way - starting with the set of txns
-	// referenced by documents and then removing any not in that set
-	// from the txns collection - is unsafe as it will result in the
-	// removal of transactions created during the pruning process.
-	t := newSimpleTimer(logInterval)
-	toRemove := make([]bson.ObjectId, 0, maxBulkOps)
-	referencedCount := 0
-	removedCount := 0
-	for _, collName := range collNames {
-		logger.Tracef("checking %s for txn references", collName)
-		coll := db.C(collName)
-		var tDoc struct {
-			Queue []string `bson:"txn-queue"`
-		}
-		hasTxnQueueEntry := bson.M{"txn-queue.0": bson.M{"$exists": 1}}
-		query := coll.Find(hasTxnQueueEntry).Select(bson.M{"txn-queue": 1})
-		query.Batch(maxBatchDocs)
-		iter := query.Iter()
-		for iter.Next(&tDoc) {
-			if stats != nil {
-				stats.DocsInspected += 1
-			}
-			for _, token := range tDoc.Queue {
-				txnId := txnTokenToId(token)
-				toRemove = append(toRemove, txnId)
-				if t.isAfter() {
-					logger.Debugf("%d referenced txns found so far", referencedCount)
-				}
-				if len(toRemove) >= maxBulkOps {
-					referencedCount += len(toRemove)
-					if count, err := oracle.RemoveTxns(toRemove); err != nil {
-						return fmt.Errorf("removing completed txns: %v", err)
-					} else {
-						removedCount += count
-					}
-					toRemove = toRemove[:0]
-				}
-			}
-		}
-		if err := iter.Close(); err != nil {
-			return fmt.Errorf("failed to read docs: %v", err)
-		}
-	}
-	if len(toRemove) > 0 {
-		referencedCount += len(toRemove)
-		if count, err := oracle.RemoveTxns(toRemove); err != nil {
-			return fmt.Errorf("removing completed txns: %v", err)
-		} else {
-			removedCount += count
-		}
-		toRemove = toRemove[:0]
-	}
-	// We don't expect 'removedCount' to be nonzero because all of them
-	// should have been handled by the Clean pass.
-	logger.Debugf("%d txns are still referenced and will be kept (%d unexpected references)",
-		referencedCount, removedCount)
-
-	// Remove the no-longer-referenced transactions from the txns collection.
-	t = newSimpleTimer(logInterval)
-	var remover Remover
-	if checkMongoSupportsOut(db) {
-		remover = newBulkRemover(txns)
-	} else {
-		remover = newBatchRemover(txns)
-	}
-	iter, err := oracle.IterTxns()
-	if err != nil {
-		return err
-	}
-	var loopErr error
-	var txnId bson.ObjectId
-	for txnId, loopErr = iter.Next(); loopErr == nil; txnId, loopErr = iter.Next() {
-		if err := remover.Remove(txnId); err != nil {
-			return fmt.Errorf("removing txns: %v", err)
-		}
-		if t.isAfter() {
-			logger.Debugf("%d completed txns pruned so far", remover.Removed())
-		}
-	}
-	if err := remover.Flush(); err != nil {
-		return fmt.Errorf("removing txns: %v", err)
-	}
-	if loopErr != EOF {
-		return loopErr
-	}
-	if stats != nil {
-		stats.TransactionsRemoved += remover.Removed()
-	}
-
-	logger.Debugf("pruning completed: removed %d txns", remover.Removed())
-	return nil
-}
-
 // txnCollections takes the list of all collections in a database and
 // filters them to just the ones that may have txn references.
 func txnCollections(inNames []string, txnsName string) []string {
@@ -582,31 +448,6 @@ func txnCollections(inNames []string, txnsName string) []string {
 		}
 	}
 	return outNames
-}
-
-// cleanupAllCollections iterates all collections that might have transaction queues and checks them to see if
-func cleanupAllCollections(db *mgo.Database, oracle Oracle, txnsName string, stats *CleanupStats) error {
-	collNames, err := db.CollectionNames()
-	if err != nil {
-		return fmt.Errorf("reading collection names: %v", err)
-	}
-	collNames = txnCollections(collNames, txnsName)
-	logger.Debugf("%d collections with txns to cleanup", len(collNames))
-	for _, name := range collNames {
-		cleaner := NewCollectionCleaner(CollectionConfig{
-			Oracle: oracle,
-			Source: db.C(name),
-		})
-		if err := cleaner.Cleanup(); err != nil {
-			return err
-		}
-		if stats != nil {
-			stats.CollectionsInspected += 1
-			stats.DocsInspected += cleaner.stats.DocCount
-			stats.DocsCleaned += cleaner.stats.UpdatedDocCount
-		}
-	}
-	return nil
 }
 
 func txnTokenToId(token string) bson.ObjectId {
