@@ -129,13 +129,20 @@ type txnRunner interface {
 	ResumeAll() error
 }
 
+// Clock is a simplified form of juju/clock.Clock, since we don't need all the methods
+// and this allows us to be compatible with both juju/clock.Clock and juju/utils/clock.Clock
+type Clock interface {
+	// Now returns the current clock time.
+	Now() time.Time
+}
+
 type transactionRunner struct {
 	db                        *mgo.Database
 	transactionCollectionName string
 	changeLogName             string
 	testHooks                 chan ([]TestHook)
 	runTransactionObserver    func(ObservedTransaction)
-	clock                     clock.Clock
+	clock                     Clock
 
 	newRunner func() txnRunner
 }
@@ -176,7 +183,7 @@ type RunnerParams struct {
 
 	// Clock is an optional clock to use. If Clock is nil, clock.WallClock will
 	// be used.
-	Clock clock.Clock
+	Clock Clock
 }
 
 // NewRunner returns a Runner which runs transactions for the database specified in params.
