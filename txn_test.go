@@ -219,6 +219,37 @@ func (s *txnSuite) TestExcessiveContention(c *gc.C) {
 	c.Assert(maxAttempt, gc.Equals, 2)
 }
 
+func (s *txnSuite) TestSetFailIfTransactionNoTxn(c *gc.C) {
+	checker := txntesting.SetFailIfTransaction(c, s.txnRunner)
+	// Check should succeed if there is no transaction
+	checker.Check()
+}
+
+func (s *txnSuite) TestSetFailIfTransaction(c *gc.C) {
+	checker := txntesting.SetFailIfTransaction(c, s.txnRunner)
+	buildTxn := func(attempt int) ([]txn.Op, error) {
+		ops := []txn.Op{{
+			C:      s.collection.Name,
+			Id:     "1",
+			Assert: txn.DocMissing,
+			Insert: bson.D{{"name", "Bar"}},
+		}}
+		return ops, nil
+	}
+	err := s.txnRunner.Run(buildTxn)
+	c.Check(err, gc.IsNil)
+	// The test should currently be flagged failing. We use Assert because
+	// we have to abort the test now for it to fail the test suite.
+	c.Assert(c.Failed(), gc.Equals, true)
+	// Reset the failed state
+	c.Succeed()
+	// checker.Check() should also fail the test suite
+	checker.Check()
+	failed := c.Failed()
+	c.Succeed()
+	c.Assert(failed, gc.Equals, true)
+}
+
 func (s *txnSuite) TestNothingToDo(c *gc.C) {
 	maxAttempt := 0
 	buildTxn := func(attempt int) ([]txn.Op, error) {
