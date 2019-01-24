@@ -158,8 +158,7 @@ type ObservedTransaction struct {
 	Error error
 	// Duration is length of time it took to run the operation
 	Duration time.Duration
-	// Attempt is the number of attempts it took for the transaction to be
-	// applied
+	// Attempt is the current attempt to apply the operation.
 	Attempt int
 }
 
