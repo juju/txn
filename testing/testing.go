@@ -75,3 +75,22 @@ func SetTestHooks(c *gc.C, runner txn.Runner, hooks ...txn.TestHook) Transaction
 		c.Assert(remaining, gc.HasLen, 0)
 	}
 }
+
+// SetFailIfTransaction will set a transaction hook that marks the test as an error
+// if there is a transaction run. This is used if you know a given set of operations
+// should *not* trigger database updates.
+func SetFailIfTransaction(c *gc.C, runner txn.Runner) TransactionChecker {
+	transactionHooks := txn.TestHooks(runner)
+	hooks := []txn.TestHook{{Before: func() {
+		c.Error("a transaction was started")
+	}}}
+	original := <-transactionHooks
+	transactionHooks <- hooks
+	c.Assert(original, gc.HasLen, 0)
+	return func() {
+		remaining := <-transactionHooks
+		transactionHooks <- nil
+		c.Check(remaining, gc.HasLen, 1,
+			gc.Commentf("the hook was unexpectedly consumed"))
+	}
+}
