@@ -346,6 +346,43 @@ func (s *txnSuite) TestRunFailureAlwaysUnexpectedMessage(c *gc.C) {
 	c.Check(tries, gc.Equals, 3)
 }
 
+func (s *txnSuite) TestRunFailureIOTimeout(c *gc.C) {
+	runner := jujutxn.NewRunner(jujutxn.RunnerParams{})
+	fake := &fakeRunner{errors: []error{errors.New("i/o timeout")}}
+	jujutxn.SetRunnerFunc(runner, fake.new)
+	tries := 0
+	// Doesn't matter what this returns as long as it isn't an error.
+	buildTxn := func(attempt int) ([]txn.Op, error) {
+		tries++
+		// return 1 op that happens to do nothing
+		return []txn.Op{{}}, nil
+	}
+	err := runner.Run(buildTxn)
+	c.Check(err, gc.Equals, nil)
+	c.Check(tries, gc.Equals, 2)
+}
+
+func (s *txnSuite) TestRunFailureAlwaysIOTimeout(c *gc.C) {
+	runner := jujutxn.NewRunner(jujutxn.RunnerParams{})
+	fake := &fakeRunner{errors: []error{
+		errors.New("i/o timeout"),
+		errors.New("i/o timeout"),
+		errors.New("i/o timeout"),
+		errors.New("i/o timeout"),
+	}}
+	jujutxn.SetRunnerFunc(runner, fake.new)
+	tries := 0
+	// Doesn't matter what this returns as long as it isn't an error.
+	buildTxn := func(attempt int) ([]txn.Op, error) {
+		tries++
+		// return 1 op that happens to do nothing
+		return []txn.Op{{}}, nil
+	}
+	err := runner.Run(buildTxn)
+	c.Check(err, gc.ErrorMatches, "i/o timeout")
+	c.Check(tries, gc.Equals, 3)
+}
+
 func (s *txnSuite) TestRunTransactionObserver(c *gc.C) {
 	var calls []jujutxn.ObservedTransaction
 	clock := testclock.NewClock(time.Now())
