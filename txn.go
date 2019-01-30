@@ -243,9 +243,14 @@ func (tr *transactionRunner) Run(transactions TransactionSource) error {
 		} else if err != txn.ErrAborted {
 			// Mongo very occasionally returns an intermittent
 			// "unexpected message" error. Retry those.
+			// Also mongo sometimes gets very busy and we get an
+			// i/o timeout. We retry those too.
 			// However if this is the last time, return that error
 			// rather than the excessive contention error.
-			if !strings.HasSuffix(err.Error(), "unexpected message") || i == (nrRetries-1) {
+			msg := err.Error()
+			retryErr := strings.HasSuffix(msg, "unexpected message") ||
+				strings.HasSuffix(msg, "i/o timeout")
+			if !retryErr || i == (nrRetries-1) {
 				return err
 			}
 		}
