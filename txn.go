@@ -103,7 +103,7 @@ type PruneOptions struct {
 // Runner instances applies operations to collections in a database.
 type Runner interface {
 	// RunTransaction applies the specified transaction operations to a database.
-	RunTransaction(ops []txn.Op) error
+	RunTransaction(ops []txn.Op, attempt int) error
 
 	// Run calls the nominated function to get the transaction operations to apply to a database.
 	// If there is a failure due to a txn.ErrAborted error, the attempt is retried up to nrRetries times.
@@ -158,6 +158,8 @@ type ObservedTransaction struct {
 	Error error
 	// Duration is length of time it took to run the operation
 	Duration time.Duration
+	// Attempt is the current attempt to apply the operation.
+	Attempt int
 }
 
 // RunnerParams are used to construct a new transaction runner.
@@ -238,7 +240,7 @@ func (tr *transactionRunner) Run(transactions TransactionSource) error {
 			// Treat this the same as ErrNoOperations but don't suppress other errors.
 			return nil
 		}
-		if err := tr.RunTransaction(ops); err == nil {
+		if err := tr.RunTransaction(ops, i); err == nil {
 			return nil
 		} else if err != txn.ErrAborted {
 			// Mongo very occasionally returns an intermittent
@@ -259,7 +261,7 @@ func (tr *transactionRunner) Run(transactions TransactionSource) error {
 }
 
 // RunTransaction is defined on Runner.
-func (tr *transactionRunner) RunTransaction(ops []txn.Op) error {
+func (tr *transactionRunner) RunTransaction(ops []txn.Op, attempt int) error {
 	testHooks := <-tr.testHooks
 	tr.testHooks <- nil
 	if len(testHooks) > 0 {
@@ -292,6 +294,7 @@ func (tr *transactionRunner) RunTransaction(ops []txn.Op) error {
 			Ops:      ops,
 			Error:    err,
 			Duration: delta,
+			Attempt:  attempt,
 		})
 	}
 	return err
