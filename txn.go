@@ -158,6 +158,8 @@ type ObservedTransaction struct {
 	Error error
 	// Duration is length of time it took to run the operation
 	Duration time.Duration
+	// The number of retries before the transaction was committed or aborted.
+	RetryCount int
 }
 
 // RunnerParams are used to construct a new transaction runner.
@@ -238,7 +240,7 @@ func (tr *transactionRunner) Run(transactions TransactionSource) error {
 			// Treat this the same as ErrNoOperations but don't suppress other errors.
 			return nil
 		}
-		if err := tr.RunTransaction(ops); err == nil {
+		if err := tr.runTransactionWithRetryCount(ops, i); err == nil {
 			return nil
 		} else if err != txn.ErrAborted {
 			// Mongo very occasionally returns an intermittent
@@ -260,6 +262,10 @@ func (tr *transactionRunner) Run(transactions TransactionSource) error {
 
 // RunTransaction is defined on Runner.
 func (tr *transactionRunner) RunTransaction(ops []txn.Op) error {
+	return tr.runTransactionWithRetryCount(ops, 0)
+}
+
+func (tr *transactionRunner) runTransactionWithRetryCount(ops []txn.Op, retryCount int) error {
 	testHooks := <-tr.testHooks
 	tr.testHooks <- nil
 	if len(testHooks) > 0 {
@@ -289,9 +295,10 @@ func (tr *transactionRunner) RunTransaction(ops []txn.Op) error {
 	delta := tr.clock.Now().Sub(start)
 	if tr.runTransactionObserver != nil {
 		tr.runTransactionObserver(ObservedTransaction{
-			Ops:      ops,
-			Error:    err,
-			Duration: delta,
+			Ops:        ops,
+			Error:      err,
+			Duration:   delta,
+			RetryCount: retryCount,
 		})
 	}
 	return err

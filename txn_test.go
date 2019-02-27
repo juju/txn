@@ -419,9 +419,11 @@ func (s *txnSuite) TestRunTransactionObserver(c *gc.C) {
 	c.Check(calls[0].Ops, gc.DeepEquals, ops)
 	c.Check(calls[0].Error, gc.Equals, txn.ErrAborted)
 	c.Check(calls[0].Duration, gc.Equals, time.Second)
+	c.Check(calls[0].RetryCount, gc.Equals, 0)
 	c.Check(calls[1].Ops, gc.DeepEquals, ops)
 	c.Check(calls[1].Error, gc.IsNil)
 	c.Check(calls[1].Duration, gc.Equals, 100*time.Millisecond)
+	c.Check(calls[1].RetryCount, gc.Equals, 1)
 }
 
 type fakeRunner struct {
