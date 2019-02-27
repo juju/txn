@@ -103,7 +103,7 @@ type PruneOptions struct {
 // Runner instances applies operations to collections in a database.
 type Runner interface {
 	// RunTransaction applies the specified transaction operations to a database.
-	RunTransaction(ops []txn.Op) error
+	RunTransaction(*Transaction) error
 
 	// Run calls the nominated function to get the transaction operations to apply to a database.
 	// If there is a failure due to a txn.ErrAborted error, the attempt is retried up to nrRetries times.
@@ -141,7 +141,7 @@ type transactionRunner struct {
 	transactionCollectionName string
 	changeLogName             string
 	testHooks                 chan ([]TestHook)
-	runTransactionObserver    func(ObservedTransaction)
+	runTransactionObserver    func(Transaction)
 	clock                     Clock
 
 	newRunner func() txnRunner
@@ -149,15 +149,17 @@ type transactionRunner struct {
 
 var _ Runner = (*transactionRunner)(nil)
 
-// ObservedTransaction is a struct that is passed to RunTransactionObserver whenever a
+// Transaction is a struct that is passed to RunTransactionObserver whenever a
 // transaction is run.
-type ObservedTransaction struct {
+type Transaction struct {
 	// Ops is the operations that were performed
 	Ops []txn.Op
 	// Error is the error returned from running the operation, might be nil
 	Error error
 	// Duration is length of time it took to run the operation
 	Duration time.Duration
+	// Attempt is the current attempt to apply the operation.
+	Attempt int
 }
 
 // RunnerParams are used to construct a new transaction runner.
@@ -179,7 +181,7 @@ type RunnerParams struct {
 	// RunTransactionObserver, if non-nil, will be called when
 	// a Run or RunTransaction call has completed. It will be
 	// passed the txn.Ops and the error result.
-	RunTransactionObserver func(ObservedTransaction)
+	RunTransactionObserver func(Transaction)
 
 	// Clock is an optional clock to use. If Clock is nil, clock.WallClock will
 	// be used.
@@ -238,7 +240,10 @@ func (tr *transactionRunner) Run(transactions TransactionSource) error {
 			// Treat this the same as ErrNoOperations but don't suppress other errors.
 			return nil
 		}
-		if err := tr.RunTransaction(ops); err == nil {
+		if err = tr.RunTransaction(&Transaction{
+			Ops:     ops,
+			Attempt: i,
+		}); err == nil {
 			return nil
 		} else if err != txn.ErrAborted {
 			// Mongo very occasionally returns an intermittent
@@ -259,7 +264,7 @@ func (tr *transactionRunner) Run(transactions TransactionSource) error {
 }
 
 // RunTransaction is defined on Runner.
-func (tr *transactionRunner) RunTransaction(ops []txn.Op) error {
+func (tr *transactionRunner) RunTransaction(transaction *Transaction) error {
 	testHooks := <-tr.testHooks
 	tr.testHooks <- nil
 	if len(testHooks) > 0 {
@@ -285,14 +290,11 @@ func (tr *transactionRunner) RunTransaction(ops []txn.Op) error {
 	}
 	start := tr.clock.Now()
 	runner := tr.newRunner()
-	err := runner.Run(ops, "", nil)
-	delta := tr.clock.Now().Sub(start)
+	err := runner.Run(transaction.Ops, "", nil)
 	if tr.runTransactionObserver != nil {
-		tr.runTransactionObserver(ObservedTransaction{
-			Ops:      ops,
-			Error:    err,
-			Duration: delta,
-		})
+		transaction.Error = err
+		transaction.Duration = tr.clock.Now().Sub(start)
+		tr.runTransactionObserver(*transaction)
 	}
 	return err
 }

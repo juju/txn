@@ -65,7 +65,10 @@ func (s *txnSuite) TestRunTransaction(c *gc.C) {
 		Assert: txn.DocMissing,
 		Insert: doc,
 	}}
-	err := s.txnRunner.RunTransaction(ops)
+	err := s.txnRunner.RunTransaction(&jujutxn.Transaction{
+		Ops:     ops,
+		Attempt: 0,
+	})
 	c.Assert(err, gc.IsNil)
 	var found simpleDoc
 	err = s.collection.FindId("1").One(&found)
@@ -102,7 +105,10 @@ func (s *txnSuite) setDocName(c *gc.C, id, name string) {
 		Assert: txn.DocExists,
 		Update: bson.D{{"$set", bson.D{{"name", name}}}},
 	}}
-	err := s.txnRunner.RunTransaction(ops)
+	err := s.txnRunner.RunTransaction(&jujutxn.Transaction{
+		Ops:     ops,
+		Attempt: 0,
+	})
 	c.Assert(err, gc.IsNil)
 }
 
@@ -114,7 +120,10 @@ func (s *txnSuite) insertDoc(c *gc.C, id, name string) {
 		Assert: txn.DocMissing,
 		Insert: doc,
 	}}
-	err := s.txnRunner.RunTransaction(ops)
+	err := s.txnRunner.RunTransaction(&jujutxn.Transaction{
+		Ops:     ops,
+		Attempt: 0,
+	})
 	c.Assert(err, gc.IsNil)
 }
 
@@ -384,10 +393,10 @@ func (s *txnSuite) TestRunFailureAlwaysIOTimeout(c *gc.C) {
 }
 
 func (s *txnSuite) TestRunTransactionObserver(c *gc.C) {
-	var calls []jujutxn.ObservedTransaction
+	var calls []jujutxn.Transaction
 	clock := testclock.NewClock(time.Now())
 	runner := jujutxn.NewRunner(jujutxn.RunnerParams{
-		RunTransactionObserver: func(txn jujutxn.ObservedTransaction) {
+		RunTransactionObserver: func(txn jujutxn.Transaction) {
 			calls = append(calls, txn)
 		},
 		Clock: clock,
@@ -419,9 +428,11 @@ func (s *txnSuite) TestRunTransactionObserver(c *gc.C) {
 	c.Check(calls[0].Ops, gc.DeepEquals, ops)
 	c.Check(calls[0].Error, gc.Equals, txn.ErrAborted)
 	c.Check(calls[0].Duration, gc.Equals, time.Second)
+	c.Check(calls[0].Attempt, gc.Equals, 0)
 	c.Check(calls[1].Ops, gc.DeepEquals, ops)
 	c.Check(calls[1].Error, gc.IsNil)
 	c.Check(calls[1].Duration, gc.Equals, 100*time.Millisecond)
+	c.Check(calls[1].Attempt, gc.Equals, 1)
 }
 
 type fakeRunner struct {
