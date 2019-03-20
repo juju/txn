@@ -42,6 +42,7 @@ func (s *txnSuite) SetUpTest(c *gc.C) {
 	s.MgoSuite.SetUpTest(c)
 	db := s.Session.DB("juju")
 	s.collection = db.C("test")
+	s.collection.Create(&mgo.CollectionInfo{})
 	s.txnRunner = jujutxn.NewRunner(jujutxn.RunnerParams{
 		Database: db,
 	})

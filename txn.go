@@ -21,6 +21,7 @@ import (
 	"github.com/juju/loggo"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+	"gopkg.in/mgo.v2/sstxn"
 	"gopkg.in/mgo.v2/txn"
 )
 
@@ -126,6 +127,7 @@ type Runner interface {
 
 type txnRunner interface {
 	Run([]txn.Op, bson.ObjectId, interface{}) error
+	ChangeLog(*mgo.Collection)
 	ResumeAll() error
 }
 
@@ -205,6 +207,10 @@ func NewRunner(params RunnerParams) Runner {
 	if txnRunner.changeLogName == "" {
 		txnRunner.changeLogName = defaultChangeLogName
 	}
+	// XXX: jam, not here, this should be done outside this code
+	if params.Database != nil {
+		params.Database.C(txnRunner.changeLogName).Create(&mgo.CollectionInfo{})
+	}
 	txnRunner.testHooks = make(chan ([]TestHook), 1)
 	txnRunner.testHooks <- nil
 	txnRunner.newRunner = txnRunner.newRunnerImpl
@@ -218,7 +224,12 @@ func NewRunner(params RunnerParams) Runner {
 
 func (tr *transactionRunner) newRunnerImpl() txnRunner {
 	db := tr.db
-	runner := txn.NewRunner(db.C(tr.transactionCollectionName))
+	var runner txnRunner
+	if false {
+		runner = txn.NewRunner(db.C(tr.transactionCollectionName))
+	} else {
+		runner = sstxn.NewRunner(db, logger)
+	}
 	runner.ChangeLog(db.C(tr.changeLogName))
 	return runner
 }
