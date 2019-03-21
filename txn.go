@@ -145,6 +145,7 @@ type transactionRunner struct {
 	testHooks                 chan ([]TestHook)
 	runTransactionObserver    func(Transaction)
 	clock                     Clock
+	serverSideTransactions    bool
 
 	newRunner func() txnRunner
 }
@@ -188,6 +189,8 @@ type RunnerParams struct {
 	// Clock is an optional clock to use. If Clock is nil, clock.WallClock will
 	// be used.
 	Clock Clock
+
+	ServerSideTransactions bool
 }
 
 // NewRunner returns a Runner which runs transactions for the database specified in params.
@@ -200,16 +203,13 @@ func NewRunner(params RunnerParams) Runner {
 		changeLogName:             params.ChangeLogName,
 		runTransactionObserver:    params.RunTransactionObserver,
 		clock:                     params.Clock,
+		serverSideTransactions:    params.ServerSideTransactions,
 	}
 	if txnRunner.transactionCollectionName == "" {
 		txnRunner.transactionCollectionName = defaultTxnCollectionName
 	}
 	if txnRunner.changeLogName == "" {
 		txnRunner.changeLogName = defaultChangeLogName
-	}
-	// XXX: jam, not here, this should be done outside this code
-	if params.Database != nil {
-		params.Database.C(txnRunner.changeLogName).Create(&mgo.CollectionInfo{})
 	}
 	txnRunner.testHooks = make(chan ([]TestHook), 1)
 	txnRunner.testHooks <- nil
@@ -225,10 +225,10 @@ func NewRunner(params RunnerParams) Runner {
 func (tr *transactionRunner) newRunnerImpl() txnRunner {
 	db := tr.db
 	var runner txnRunner
-	if false {
-		runner = txn.NewRunner(db.C(tr.transactionCollectionName))
-	} else {
+	if tr.serverSideTransactions {
 		runner = sstxn.NewRunner(db, logger)
+	} else {
+		runner = txn.NewRunner(db.C(tr.transactionCollectionName))
 	}
 	runner.ChangeLog(db.C(tr.changeLogName))
 	return runner

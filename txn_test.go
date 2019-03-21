@@ -43,8 +43,12 @@ func (s *txnSuite) SetUpTest(c *gc.C) {
 	db := s.Session.DB("juju")
 	s.collection = db.C("test")
 	s.collection.Create(&mgo.CollectionInfo{})
+	txnsLog := db.C("txns.log")
+	txnsLog.Create(&mgo.CollectionInfo{})
 	s.txnRunner = jujutxn.NewRunner(jujutxn.RunnerParams{
-		Database: db,
+		Database:               db,
+		ChangeLogName:          "txns.log",
+		ServerSideTransactions: true,
 	})
 }
 
