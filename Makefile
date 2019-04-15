@@ -16,9 +16,9 @@ check-licence:
 		xargs -I {} echo FAIL: licence missed: {}
 
 check-go:
-	$(eval GOFMT := $(strip $(shell gofmt -l .| sed -e "s/^/ /g")))
+	$(eval GOFMT := $(strip $(shell gofmt -l .| grep -v '^vendor/' | sed -e "s/^/ /g")))
 	@(if [ "x$(GOFMT)" != "x" ]; then \
 		echo go fmt is sad: $(GOFMT); \
 		exit 1; \
 	fi )
-	@(go tool vet -all -composites=false -copylocks=false .)
+	@(go vet -all -composites=false .)
