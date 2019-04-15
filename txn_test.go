@@ -5,6 +5,7 @@ package txn_test
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/juju/clock/testclock"
@@ -48,13 +49,71 @@ func (s *txnSuite) SetUpTest(c *gc.C) {
 	s.txnRunner = jujutxn.NewRunner(jujutxn.RunnerParams{
 		Database:               db,
 		ChangeLogName:          "txns.log",
-		ServerSideTransactions: true,
+		ServerSideTransactions: false,
 	})
 }
 
 func (s *txnSuite) TearDownTest(c *gc.C) {
 	s.MgoSuite.TearDownTest(c)
 	s.IsolationSuite.TearDownTest(c)
+}
+
+var _ = gc.Suite(&sstxnSuite{})
+
+type sstxnSuite struct {
+	txnSuite
+	origReplicaSet bool
+}
+
+func (s *sstxnSuite) SetUpSuite(c *gc.C) {
+	// Check to see if we can even use server-side transactions,
+	// check first so we don't restart the server just to say it
+	// doesn't support server-side transactions.
+	if testing.MgoServer.Addr() != "" {
+		// The existing server is running, check its version
+		session, err := mgo.DialWithInfo(testing.MgoServer.DialInfo())
+		c.Assert(err, gc.IsNil)
+		defer session.Close()
+		s.CheckSSTXNSupported(c, session)
+	}
+	// Make sure MgoServer is set up with replicaset enabled
+	s.origReplicaSet = testing.MgoServer.EnableReplicaSet
+	if !s.origReplicaSet {
+		testing.MgoServer.EnableReplicaSet = true
+		c.Logf("restarting Mongo with replicaset enabled")
+		testing.MgoServer.Restart()
+		session, err := mgo.DialWithInfo(testing.MgoServer.DialInfo())
+		c.Assert(err, gc.IsNil)
+		defer session.Close()
+		s.CheckSSTXNSupported(c, session)
+	}
+	s.txnSuite.SetUpSuite(c)
+}
+
+func (s *sstxnSuite) CheckSSTXNSupported(c *gc.C, session *mgo.Session) {
+	info, err := session.BuildInfo()
+	c.Assert(err, gc.IsNil)
+	if len(info.VersionArray) < 1 || info.VersionArray[0] < 4 {
+		c.Skip(fmt.Sprintf("mongo version %s doesn't support server-side-transactions", info.Version))
+	}
+}
+
+func (s *sstxnSuite) TearDownSuite(c *gc.C) {
+	s.MgoSuite.TearDownSuite(c)
+	s.IsolationSuite.TearDownSuite(c)
+	if s.origReplicaSet != testing.MgoServer.EnableReplicaSet {
+		testing.MgoServer.EnableReplicaSet = s.origReplicaSet
+		testing.MgoServer.Restart()
+	}
+}
+
+func (s *sstxnSuite) SetUpTest(c *gc.C) {
+	s.txnSuite.SetUpTest(c)
+	s.txnRunner = jujutxn.NewRunner(jujutxn.RunnerParams{
+		Database:               s.collection.Database,
+		ChangeLogName:          "txns.log",
+		ServerSideTransactions: true,
+	})
 }
 
 type simpleDoc struct {
