@@ -204,7 +204,7 @@ func NewRunner(params RunnerParams) Runner {
 	if sstxn {
 		sstxn = SupportsServerSideTransactions(params.Database)
 		if !sstxn {
-			logger.Infof("server-side transactions requested, but database does not support them")
+			logger.Warningf("server-side transactions requested, but database does not support them")
 		}
 	}
 	txnRunner := &transactionRunner{
