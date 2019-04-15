@@ -334,3 +334,16 @@ type TestHook struct {
 func TestHooks(runner Runner) chan ([]TestHook) {
 	return runner.(*transactionRunner).testHooks
 }
+
+// SupportsServerSideTransactions lets you know if the given database can support
+// server-side transactions.
+func SupportsServerSideTransactions(db *mgo.Database) bool {
+	info, err := db.Session.BuildInfo()
+	if err != nil {
+		return false
+	}
+	if len(info.VersionArray) < 1 || info.VersionArray[0] < 4 {
+		return false
+	}
+	return true
+}

@@ -71,10 +71,7 @@ func (s *sstxnSuite) SetUpSuite(c *gc.C) {
 	// doesn't support server-side transactions.
 	if testing.MgoServer.Addr() != "" {
 		// The existing server is running, check its version
-		session, err := mgo.DialWithInfo(testing.MgoServer.DialInfo())
-		c.Assert(err, gc.IsNil)
-		defer session.Close()
-		s.CheckSSTXNSupported(c, session)
+		s.CheckSSTXNSupported(c)
 	}
 	// Make sure MgoServer is set up with replicaset enabled
 	s.origReplicaSet = testing.MgoServer.EnableReplicaSet
@@ -82,19 +79,19 @@ func (s *sstxnSuite) SetUpSuite(c *gc.C) {
 		testing.MgoServer.EnableReplicaSet = true
 		c.Logf("restarting Mongo with replicaset enabled")
 		testing.MgoServer.Restart()
-		session, err := mgo.DialWithInfo(testing.MgoServer.DialInfo())
-		c.Assert(err, gc.IsNil)
-		defer session.Close()
-		s.CheckSSTXNSupported(c, session)
+		s.CheckSSTXNSupported(c)
 	}
 	s.txnSuite.SetUpSuite(c)
 }
 
-func (s *sstxnSuite) CheckSSTXNSupported(c *gc.C, session *mgo.Session) {
-	info, err := session.BuildInfo()
+func (s *sstxnSuite) CheckSSTXNSupported(c *gc.C) {
+	info := testing.MgoServer.DialInfo()
+	session, err := mgo.DialWithInfo(info)
 	c.Assert(err, gc.IsNil)
-	if len(info.VersionArray) < 1 || info.VersionArray[0] < 4 {
-		c.Skip(fmt.Sprintf("mongo version %s doesn't support server-side-transactions", info.Version))
+	defer session.Close()
+	db := session.DB(info.Database)
+	if !jujutxn.SupportsServerSideTransactions(db) {
+		c.Skip(fmt.Sprintf("mongo version doesn't support server-side-transactions"))
 	}
 }
 
