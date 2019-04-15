@@ -190,6 +190,9 @@ type RunnerParams struct {
 	// be used.
 	Clock Clock
 
+	// ServerSideTransactions indicates that if SSTXNs are available, use them.
+	// Note that we will check if they are supported server side, and fall
+	// back to client-side transactions if they are not supported.
 	ServerSideTransactions bool
 }
 
@@ -197,13 +200,20 @@ type RunnerParams struct {
 // Collection names used to manage the transactions and change log may also be specified in
 // params, but if not, default values will be used.
 func NewRunner(params RunnerParams) Runner {
+	sstxn := params.ServerSideTransactions
+	if sstxn {
+		sstxn = SupportsServerSideTransactions(params.Database)
+		if !sstxn {
+			logger.Infof("server-side transactions requested, but database does not support them")
+		}
+	}
 	txnRunner := &transactionRunner{
 		db:                        params.Database,
 		transactionCollectionName: params.TransactionCollectionName,
 		changeLogName:             params.ChangeLogName,
 		runTransactionObserver:    params.RunTransactionObserver,
 		clock:                     params.Clock,
-		serverSideTransactions:    params.ServerSideTransactions,
+		serverSideTransactions:    sstxn,
 	}
 	if txnRunner.transactionCollectionName == "" {
 		txnRunner.transactionCollectionName = defaultTxnCollectionName
