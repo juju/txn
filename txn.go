@@ -21,6 +21,7 @@ import (
 	"github.com/juju/loggo"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+	"gopkg.in/mgo.v2/sstxn"
 	"gopkg.in/mgo.v2/txn"
 )
 
@@ -126,6 +127,7 @@ type Runner interface {
 
 type txnRunner interface {
 	Run([]txn.Op, bson.ObjectId, interface{}) error
+	ChangeLog(*mgo.Collection)
 	ResumeAll() error
 }
 
@@ -143,6 +145,7 @@ type transactionRunner struct {
 	testHooks                 chan ([]TestHook)
 	runTransactionObserver    func(Transaction)
 	clock                     Clock
+	serverSideTransactions    bool
 
 	newRunner func() txnRunner
 }
@@ -186,18 +189,31 @@ type RunnerParams struct {
 	// Clock is an optional clock to use. If Clock is nil, clock.WallClock will
 	// be used.
 	Clock Clock
+
+	// ServerSideTransactions indicates that if SSTXNs are available, use them.
+	// Note that we will check if they are supported server side, and fall
+	// back to client-side transactions if they are not supported.
+	ServerSideTransactions bool
 }
 
 // NewRunner returns a Runner which runs transactions for the database specified in params.
 // Collection names used to manage the transactions and change log may also be specified in
 // params, but if not, default values will be used.
 func NewRunner(params RunnerParams) Runner {
+	sstxn := params.ServerSideTransactions
+	if sstxn {
+		sstxn = SupportsServerSideTransactions(params.Database)
+		if !sstxn {
+			logger.Warningf("server-side transactions requested, but database does not support them")
+		}
+	}
 	txnRunner := &transactionRunner{
 		db:                        params.Database,
 		transactionCollectionName: params.TransactionCollectionName,
 		changeLogName:             params.ChangeLogName,
 		runTransactionObserver:    params.RunTransactionObserver,
 		clock:                     params.Clock,
+		serverSideTransactions:    sstxn,
 	}
 	if txnRunner.transactionCollectionName == "" {
 		txnRunner.transactionCollectionName = defaultTxnCollectionName
@@ -218,7 +234,12 @@ func NewRunner(params RunnerParams) Runner {
 
 func (tr *transactionRunner) newRunnerImpl() txnRunner {
 	db := tr.db
-	runner := txn.NewRunner(db.C(tr.transactionCollectionName))
+	var runner txnRunner
+	if tr.serverSideTransactions {
+		runner = sstxn.NewRunner(db, logger)
+	} else {
+		runner = txn.NewRunner(db.C(tr.transactionCollectionName))
+	}
 	runner.ChangeLog(db.C(tr.changeLogName))
 	return runner
 }
@@ -322,4 +343,17 @@ type TestHook struct {
 // Exported only for testing.
 func TestHooks(runner Runner) chan ([]TestHook) {
 	return runner.(*transactionRunner).testHooks
+}
+
+// SupportsServerSideTransactions lets you know if the given database can support
+// server-side transactions.
+func SupportsServerSideTransactions(db *mgo.Database) bool {
+	info, err := db.Session.BuildInfo()
+	if err != nil {
+		return false
+	}
+	if len(info.VersionArray) < 1 || info.VersionArray[0] < 4 {
+		return false
+	}
+	return true
 }
