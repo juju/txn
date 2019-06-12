@@ -72,6 +72,10 @@ func SetTestHooks(c *gc.C, runner txn.Runner, hooks ...txn.TestHook) Transaction
 	return func() {
 		remaining := <-transactionHooks
 		transactionHooks <- nil
+		// At least one hook has not run. Some common causes:
+		// - forgetting to prefix the call to Check() with defer
+		// - checks in the build function failing, so the slice of txn.Ops never gets run
+		// - miscalculating the number of hooks and/or attempts
 		c.Assert(remaining, gc.HasLen, 0)
 	}
 }
