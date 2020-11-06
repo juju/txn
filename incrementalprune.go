@@ -719,16 +719,17 @@ func (p *IncrementalPruner) removeTxns(txnsToDelete []bson.ObjectId, txns *mgo.C
 		results, err := txns.RemoveAll(bson.M{
 			"_id": bson.M{"$in": txnsToDelete},
 		})
-		logger.Tracef("removing %d txns removed %d", len(txnsToDelete), results.Removed)
-		p.stats.TxnsRemoved += int64(results.Removed)
-		p.stats.TxnRemoveTime += time.Since(tStart)
-		if p.ProgressChan != nil {
-			p.ProgressChan <- ProgressMessage{
-				TxnsRemoved: results.Removed,
-			}
-		}
 		if err != nil {
 			errorCh <- errors.Trace(err)
+		} else {
+			logger.Tracef("removing %d txns removed %d", len(txnsToDelete), results.Removed)
+			p.stats.TxnsRemoved += int64(results.Removed)
+			p.stats.TxnRemoveTime += time.Since(tStart)
+			if p.ProgressChan != nil {
+				p.ProgressChan <- ProgressMessage{
+					TxnsRemoved: results.Removed,
+				}
+			}
 		}
 		session.Close()
 		wg.Done()
