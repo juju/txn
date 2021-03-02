@@ -2,11 +2,7 @@ PROJECT := github.com/juju/txn
 
 .PHONY: check-licence check-go check
 
-dep:
-	go get -v github.com/golang/dep
-	$(GOPATH)/bin/dep ensure -v -vendor-only
-
-check: check-licence check-go dep
+check: check-licence check-go
 	go test -v $(PROJECT)/... -check.v
 
 check-licence:
