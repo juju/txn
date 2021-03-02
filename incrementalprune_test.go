@@ -8,12 +8,12 @@ import (
 	"time"
 
 	"github.com/juju/errors"
+	"github.com/juju/mgo/v2"
+	"github.com/juju/mgo/v2/bson"
+	"github.com/juju/mgo/v2/txn"
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
-	"gopkg.in/mgo.v2/txn"
 )
 
 var _ = gc.Suite(&IncrementalPruneSuite{})
@@ -152,7 +152,7 @@ func (s *IncrementalPruneSuite) TestPruneCleansUpStash(c *gc.C) {
 	txnsStash := s.db.C("txns.stash")
 	stashId := bson.D{{"c", "docs"}, {"id", "1"}}
 	c.Assert(txnsStash.FindId(stashId).One(&doc), jc.ErrorIsNil)
-	// Old versions of gopkg.in/mgo.v2 di not clean up the txn-queue during remove
+	// Old versions of github.com/juju/mgo/v2 did not clean up the txn-queue during remove
 	// handle both versions here
 	extraTokens := 0
 	if len(doc.Queue) == 2 {
@@ -246,7 +246,7 @@ func (s *IncrementalPruneSuite) TestPruneLeavesIncompleteStashAlone(c *gc.C) {
 	txnsStash := s.db.C("txns.stash")
 	stashId := bson.D{{"c", "docs"}, {"id", "1"}}
 	c.Assert(txnsStash.FindId(stashId).One(&doc), jc.ErrorIsNil)
-	// Old versions of gopkg.in/mgo.v2 di not clean up the txn-queue during remove
+	// Old versions of github.com/juju/mgo/v2 did not clean up the txn-queue during remove
 	// handle both versions here
 	extraTokens := 0
 	if len(doc.Queue) == 3 {

@@ -8,10 +8,10 @@ import (
 
 	"github.com/juju/clock/testclock"
 	"github.com/juju/loggo"
+	"github.com/juju/mgo/v2/bson"
+	"github.com/juju/mgo/v2/txn"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
-	"gopkg.in/mgo.v2/bson"
-	"gopkg.in/mgo.v2/txn"
 
 	jujutxn "github.com/juju/txn"
 )

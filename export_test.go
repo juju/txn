@@ -6,7 +6,7 @@ package txn
 import (
 	"time"
 
-	"gopkg.in/mgo.v2"
+	"github.com/juju/mgo/v2"
 )
 
 type TxnRunner txnRunner

@@ -8,8 +8,8 @@ import (
 	"sort"
 	"time"
 
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/juju/mgo/v2"
+	"github.com/juju/mgo/v2/bson"
 )
 
 // OracleIterator is used to walk over the remaining transactions.
