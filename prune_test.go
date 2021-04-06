@@ -13,7 +13,7 @@ import (
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
 
-	jujutxn "github.com/juju/txn"
+	jujutxn "github.com/juju/txn/v2"
 )
 
 type PruneSuite struct {

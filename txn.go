@@ -14,6 +14,7 @@ package txn
 
 import (
 	stderrors "errors"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -28,9 +29,21 @@ import (
 var logger = loggo.GetLogger("juju.txn")
 
 const (
-	// nrRetries is the number of time a transaction will be retried
-	// when there is an invariant assertion failure.
-	nrRetries = 3
+	// defaultClientTxnRetries is the default number of times a transaction will be retried
+	// when there is an invariant assertion failure (for client side transactions).
+	defaultClientTxnRetries = 3
+
+	// defaultServerTxnRetries is the default number of times a transaction will be retried
+	// when there is an invariant assertion failure (for server side transactions).
+	defaultServerTxnRetries = 50
+
+	// defaultRetryBackoffMillis is the default interval used to pause between
+	// unsuccessful transaction operations.
+	defaultRetryBackoffMillis = 1
+
+	// defaultRetryFuzzMillis is the default fudge factor used when pausing between
+	// unsuccessful transaction operations.
+	defaultRetryFuzzMillis = 1
 
 	// defaultTxnCollectionName is the default name of the collection used
 	// to initialise the underlying mgo transaction runner.
@@ -49,7 +62,7 @@ var (
 	// no transaction operations are available to run.
 	ErrNoOperations = stderrors.New("no transaction operations are available")
 
-	// ErrNoOperations is returned by TransactionSource implementations to signal that
+	// ErrTransientFailure is returned by TransactionSource implementations to signal that
 	// the transaction list could not be built but the caller should retry.
 	ErrTransientFailure = stderrors.New("transient failure")
 )
@@ -145,7 +158,11 @@ type transactionRunner struct {
 	testHooks                 chan ([]TestHook)
 	runTransactionObserver    func(Transaction)
 	clock                     Clock
-	serverSideTransactions    bool
+
+	serverSideTransactions bool
+	nrRetries              int
+	retryBackoffMillis     float32
+	retryFuzzMillis        float32
 
 	newRunner func() txnRunner
 }
@@ -194,6 +211,18 @@ type RunnerParams struct {
 	// Note that we will check if they are supported server side, and fall
 	// back to client-side transactions if they are not supported.
 	ServerSideTransactions bool
+
+	// MaxRetryAttempts is the number of times a transaction will be retried
+	// when there is an invariant assertion failure.
+	MaxRetryAttempts int
+
+	// RetryBackoffMillis is the interval used to pause between
+	// unsuccessful transaction operations.
+	RetryBackoffMillis float32
+
+	// RetryFuzzMillis is the fudge factor used when pausing between
+	// unsuccessful transaction operations.
+	RetryFuzzMillis float32
 }
 
 // NewRunner returns a Runner which runs transactions for the database specified in params.
@@ -214,12 +243,27 @@ func NewRunner(params RunnerParams) Runner {
 		runTransactionObserver:    params.RunTransactionObserver,
 		clock:                     params.Clock,
 		serverSideTransactions:    sstxn,
+		nrRetries:                 params.MaxRetryAttempts,
+		retryBackoffMillis:        params.RetryBackoffMillis,
+		retryFuzzMillis:           params.RetryFuzzMillis,
 	}
 	if txnRunner.transactionCollectionName == "" {
 		txnRunner.transactionCollectionName = defaultTxnCollectionName
 	}
 	if txnRunner.changeLogName == "" {
 		txnRunner.changeLogName = defaultChangeLogName
+	}
+	if txnRunner.nrRetries == 0 {
+		txnRunner.nrRetries = defaultClientTxnRetries
+		if txnRunner.serverSideTransactions {
+			txnRunner.nrRetries = defaultServerTxnRetries
+		}
+	}
+	if txnRunner.retryBackoffMillis == 0 {
+		txnRunner.retryBackoffMillis = defaultRetryBackoffMillis
+	}
+	if txnRunner.retryFuzzMillis == 0 {
+		txnRunner.retryFuzzMillis = defaultRetryFuzzMillis
 	}
 	txnRunner.testHooks = make(chan ([]TestHook), 1)
 	txnRunner.testHooks <- nil
@@ -246,7 +290,11 @@ func (tr *transactionRunner) newRunnerImpl() txnRunner {
 
 // Run is defined on Runner.
 func (tr *transactionRunner) Run(transactions TransactionSource) error {
-	for i := 0; i < nrRetries; i++ {
+	for i := 0; i < tr.nrRetries; i++ {
+		// If we are retrying, give other txns a chance to have a go.
+		if i > 0 {
+			tr.pause(i)
+		}
 		ops, err := transactions(i)
 		if err == ErrTransientFailure {
 			continue
@@ -276,12 +324,24 @@ func (tr *transactionRunner) Run(transactions TransactionSource) error {
 			msg := err.Error()
 			retryErr := strings.HasSuffix(msg, "unexpected message") ||
 				strings.HasSuffix(msg, "i/o timeout")
-			if !retryErr || i == (nrRetries-1) {
+			if !retryErr || i == (tr.nrRetries-1) {
 				return err
 			}
 		}
 	}
 	return ErrExcessiveContention
+}
+
+func (tr *transactionRunner) pause(attempt int) {
+	// Backoff a little longer each failed attempt and throw in
+	// a bit of fuzz for good measure.
+	fuzz := rand.Float32()
+	dur := time.Microsecond * time.Duration(
+		// Increase the backoff time for each attempt.
+		int(tr.retryBackoffMillis*1000)*attempt+
+			// Include a random amount of time as well.
+			int(tr.retryFuzzMillis*fuzz*1000))
+	time.Sleep(dur)
 }
 
 // RunTransaction is defined on Runner.

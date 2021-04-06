@@ -6,7 +6,7 @@ package testing
 import (
 	gc "gopkg.in/check.v1"
 
-	"github.com/juju/txn"
+	"github.com/juju/txn/v2"
 )
 
 // TransactionChecker values are returned from the various Set*Hooks calls,
