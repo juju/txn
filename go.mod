@@ -1,6 +1,6 @@
-module github.com/juju/txn
+module github.com/juju/txn/v2
 
-go 1.14
+go 1.16
 
 require (
 	github.com/juju/clock v0.0.0-20190205081909-9c5c9712527c

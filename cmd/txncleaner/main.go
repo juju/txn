@@ -15,7 +15,7 @@ import (
 
 	"github.com/juju/mgo/v2"
 
-	"github.com/juju/txn"
+	"github.com/juju/txn/v2"
 )
 
 var dbName = flag.String("db", "", "mongo database name (required)")

@@ -15,8 +15,8 @@ import (
 	"github.com/juju/testing"
 	gc "gopkg.in/check.v1"
 
-	jujutxn "github.com/juju/txn"
-	txntesting "github.com/juju/txn/testing"
+	jujutxn "github.com/juju/txn/v2"
+	txntesting "github.com/juju/txn/v2/testing"
 )
 
 var _ = gc.Suite(&txnSuite{})
@@ -24,8 +24,9 @@ var _ = gc.Suite(&txnSuite{})
 type txnSuite struct {
 	testing.IsolationSuite
 	testing.MgoSuite
-	collection *mgo.Collection
-	txnRunner  jujutxn.Runner
+	collection  *mgo.Collection
+	txnRunner   jujutxn.Runner
+	supportsSST bool
 }
 
 func (s *txnSuite) SetUpSuite(c *gc.C) {
@@ -51,6 +52,7 @@ func (s *txnSuite) SetUpTest(c *gc.C) {
 		ChangeLogName:          "txns.log",
 		ServerSideTransactions: false,
 	})
+	s.supportsSST = false
 }
 
 func (s *txnSuite) TearDownTest(c *gc.C) {
@@ -111,6 +113,7 @@ func (s *sstxnSuite) SetUpTest(c *gc.C) {
 		ChangeLogName:          "txns.log",
 		ServerSideTransactions: true,
 	})
+	s.supportsSST = true
 }
 
 type simpleDoc struct {
@@ -286,7 +289,11 @@ func (s *txnSuite) TestExcessiveContention(c *gc.C) {
 	}
 	err := s.txnRunner.Run(buildTxn)
 	c.Assert(err, gc.Equals, jujutxn.ErrExcessiveContention)
-	c.Assert(maxAttempt, gc.Equals, 2)
+	if s.supportsSST {
+		c.Assert(maxAttempt, gc.Equals, 19)
+	} else {
+		c.Assert(maxAttempt, gc.Equals, 2)
+	}
 }
 
 func (s *txnSuite) TestSetFailIfTransactionNoTxn(c *gc.C) {
