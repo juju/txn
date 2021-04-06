@@ -13,6 +13,7 @@ import (
 	"github.com/juju/mgo/v2/bson"
 	"github.com/juju/mgo/v2/txn"
 	"github.com/juju/testing"
+	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
 
 	jujutxn "github.com/juju/txn/v2"
@@ -27,6 +28,7 @@ type txnSuite struct {
 	collection  *mgo.Collection
 	txnRunner   jujutxn.Runner
 	supportsSST bool
+	backoffs    []time.Duration
 }
 
 func (s *txnSuite) SetUpSuite(c *gc.C) {
@@ -47,10 +49,14 @@ func (s *txnSuite) SetUpTest(c *gc.C) {
 	s.collection.Create(&mgo.CollectionInfo{})
 	txnsLog := db.C("txns.log")
 	txnsLog.Create(&mgo.CollectionInfo{})
+	s.backoffs = nil
 	s.txnRunner = jujutxn.NewRunner(jujutxn.RunnerParams{
 		Database:               db,
 		ChangeLogName:          "txns.log",
 		ServerSideTransactions: false,
+		PauseFunc: func(dur time.Duration) {
+			s.backoffs = append(s.backoffs, dur)
+		},
 	})
 	s.supportsSST = false
 }
@@ -112,6 +118,9 @@ func (s *sstxnSuite) SetUpTest(c *gc.C) {
 		Database:               s.collection.Database,
 		ChangeLogName:          "txns.log",
 		ServerSideTransactions: true,
+		PauseFunc: func(dur time.Duration) {
+			s.backoffs = append(s.backoffs, dur)
+		},
 	})
 	s.supportsSST = true
 }
@@ -290,9 +299,35 @@ func (s *txnSuite) TestExcessiveContention(c *gc.C) {
 	err := s.txnRunner.Run(buildTxn)
 	c.Assert(err, gc.Equals, jujutxn.ErrExcessiveContention)
 	if s.supportsSST {
-		c.Assert(maxAttempt, gc.Equals, 19)
+		c.Assert(maxAttempt, gc.Equals, 49)
 	} else {
 		c.Assert(maxAttempt, gc.Equals, 2)
+	}
+}
+
+func (s *txnSuite) TestPause(c *gc.C) {
+	buildTxn := func(attempt int) ([]txn.Op, error) {
+		ops := []txn.Op{{
+			C:      s.collection.Name,
+			Id:     "1",
+			Assert: bson.D{{"name", "Foo"}},
+			Update: bson.D{{"$set", bson.D{{"name", "Bar"}}}},
+		}}
+		return ops, nil
+	}
+	err := s.txnRunner.Run(buildTxn)
+	c.Assert(err, gc.Equals, jujutxn.ErrExcessiveContention)
+	if s.supportsSST {
+		c.Assert(s.backoffs, gc.HasLen, 49)
+		c.Assert(s.backoffs[48], jc.DurationLessThan, 50*time.Millisecond)
+		for i := 0; i < len(s.backoffs); i++ {
+			c.Assert(s.backoffs[i], jc.GreaterThan, 0)
+			if i > 0 {
+				c.Assert(s.backoffs[i-1], jc.DurationLessThan, s.backoffs[i])
+			}
+		}
+	} else {
+		c.Assert(s.backoffs, gc.HasLen, 0)
 	}
 }
 

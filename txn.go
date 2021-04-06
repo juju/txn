@@ -37,13 +37,13 @@ const (
 	// when there is an invariant assertion failure (for server side transactions).
 	defaultServerTxnRetries = 50
 
-	// defaultRetryBackoffMillis is the default interval used to pause between
+	// defaultRetryBackoff is the default interval used to pause between
 	// unsuccessful transaction operations.
-	defaultRetryBackoffMillis = 1
+	defaultRetryBackoff = 1 * time.Millisecond
 
-	// defaultRetryFuzzMillis is the default fudge factor used when pausing between
+	// defaultRetryFuzzPercent is the default fudge factor used when pausing between
 	// unsuccessful transaction operations.
-	defaultRetryFuzzMillis = 1
+	defaultRetryFuzzPercent = 20
 
 	// defaultTxnCollectionName is the default name of the collection used
 	// to initialise the underlying mgo transaction runner.
@@ -161,8 +161,9 @@ type transactionRunner struct {
 
 	serverSideTransactions bool
 	nrRetries              int
-	retryBackoffMillis     float32
-	retryFuzzMillis        float32
+	retryBackoff           time.Duration
+	retryFuzzPercent       int
+	pauseFunc              func(duration time.Duration)
 
 	newRunner func() txnRunner
 }
@@ -216,13 +217,17 @@ type RunnerParams struct {
 	// when there is an invariant assertion failure.
 	MaxRetryAttempts int
 
-	// RetryBackoffMillis is the interval used to pause between
+	// RetryBackoff is the interval used to pause between
 	// unsuccessful transaction operations.
-	RetryBackoffMillis float32
+	RetryBackoff time.Duration
 
-	// RetryFuzzMillis is the fudge factor used when pausing between
+	// RetryFuzzPercent is the fudge factor used when pausing between
 	// unsuccessful transaction operations.
-	RetryFuzzMillis float32
+	RetryFuzzPercent int
+
+	// PauseFunc, if non-nil, overrides the default function to sleep
+	// for the specified duration.
+	PauseFunc func(duration time.Duration)
 }
 
 // NewRunner returns a Runner which runs transactions for the database specified in params.
@@ -244,8 +249,9 @@ func NewRunner(params RunnerParams) Runner {
 		clock:                     params.Clock,
 		serverSideTransactions:    sstxn,
 		nrRetries:                 params.MaxRetryAttempts,
-		retryBackoffMillis:        params.RetryBackoffMillis,
-		retryFuzzMillis:           params.RetryFuzzMillis,
+		retryBackoff:              params.RetryBackoff,
+		retryFuzzPercent:          params.RetryFuzzPercent,
+		pauseFunc:                 params.PauseFunc,
 	}
 	if txnRunner.transactionCollectionName == "" {
 		txnRunner.transactionCollectionName = defaultTxnCollectionName
@@ -259,11 +265,14 @@ func NewRunner(params RunnerParams) Runner {
 			txnRunner.nrRetries = defaultServerTxnRetries
 		}
 	}
-	if txnRunner.retryBackoffMillis == 0 {
-		txnRunner.retryBackoffMillis = defaultRetryBackoffMillis
+	if txnRunner.retryBackoff == 0 {
+		txnRunner.retryBackoff = defaultRetryBackoff
 	}
-	if txnRunner.retryFuzzMillis == 0 {
-		txnRunner.retryFuzzMillis = defaultRetryFuzzMillis
+	if txnRunner.retryFuzzPercent == 0 {
+		txnRunner.retryFuzzPercent = defaultRetryFuzzPercent
+	}
+	if txnRunner.pauseFunc == nil {
+		txnRunner.pauseFunc = txnRunner.pause
 	}
 	txnRunner.testHooks = make(chan ([]TestHook), 1)
 	txnRunner.testHooks <- nil
@@ -292,8 +301,8 @@ func (tr *transactionRunner) newRunnerImpl() txnRunner {
 func (tr *transactionRunner) Run(transactions TransactionSource) error {
 	for i := 0; i < tr.nrRetries; i++ {
 		// If we are retrying, give other txns a chance to have a go.
-		if i > 0 {
-			tr.pause(i)
+		if i > 0 && tr.serverSideTransactions {
+			tr.backoff(i)
 		}
 		ops, err := transactions(i)
 		if err == ErrTransientFailure {
@@ -332,15 +341,21 @@ func (tr *transactionRunner) Run(transactions TransactionSource) error {
 	return ErrExcessiveContention
 }
 
-func (tr *transactionRunner) pause(attempt int) {
+func (tr *transactionRunner) backoff(attempt int) {
 	// Backoff a little longer each failed attempt and throw in
 	// a bit of fuzz for good measure.
-	fuzz := rand.Float32()
-	dur := time.Microsecond * time.Duration(
-		// Increase the backoff time for each attempt.
-		int(tr.retryBackoffMillis*1000)*attempt+
-			// Include a random amount of time as well.
-			int(tr.retryFuzzMillis*fuzz*1000))
+	dur := tr.retryBackoff * time.Duration(attempt)
+
+	// fuzzFactor is between -1.0 and 1.0 * fuzzPercent
+	fuzzFactor := 2.0 * (0.5 - rand.Float32()) * float32(tr.retryFuzzPercent) / 100.0
+
+	// Include a random amount of time as well.
+	dur += time.Duration(fuzzFactor * float32(tr.retryBackoff))
+
+	tr.pauseFunc(dur)
+}
+
+func (tr *transactionRunner) pause(dur time.Duration) {
 	time.Sleep(dur)
 }
 
