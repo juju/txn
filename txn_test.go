@@ -125,6 +125,41 @@ func (s *sstxnSuite) SetUpTest(c *gc.C) {
 	s.supportsSST = true
 }
 
+func (s *sstxnSuite) TestNoChangeLog(c *gc.C) {
+	s.txnRunner = jujutxn.NewRunner(jujutxn.RunnerParams{
+		Database:               s.collection.Database,
+		ChangeLogName:          "-",
+		ServerSideTransactions: true,
+		PauseFunc: func(dur time.Duration) {
+			s.backoffs = append(s.backoffs, dur)
+		},
+	})
+
+	before, err := s.collection.Database.C("txns.log").Count()
+	c.Assert(err, gc.IsNil)
+
+	doc := simpleDoc{"1", "Foo"}
+	ops := []txn.Op{{
+		C:      s.collection.Name,
+		Id:     doc.Id,
+		Assert: txn.DocMissing,
+		Insert: doc,
+	}}
+	err = s.txnRunner.RunTransaction(&jujutxn.Transaction{
+		Ops:     ops,
+		Attempt: 0,
+	})
+	c.Assert(err, gc.IsNil)
+	var found simpleDoc
+	err = s.collection.FindId("1").One(&found)
+	c.Assert(err, gc.IsNil)
+	c.Assert(found, gc.DeepEquals, doc)
+
+	after, err := s.collection.Database.C("txns.log").Count()
+	c.Assert(err, gc.IsNil)
+	c.Assert(after, gc.Equals, before, gc.Commentf("txns.log was altered"))
+}
+
 type simpleDoc struct {
 	Id   string `bson:"_id"`
 	Name string

@@ -256,7 +256,9 @@ func NewRunner(params RunnerParams) Runner {
 	if txnRunner.transactionCollectionName == "" {
 		txnRunner.transactionCollectionName = defaultTxnCollectionName
 	}
-	if txnRunner.changeLogName == "" {
+	if txnRunner.changeLogName == "-" {
+		txnRunner.changeLogName = ""
+	} else if txnRunner.changeLogName == "" {
 		txnRunner.changeLogName = defaultChangeLogName
 	}
 	if txnRunner.nrRetries == 0 {
@@ -293,7 +295,9 @@ func (tr *transactionRunner) newRunnerImpl() txnRunner {
 	} else {
 		runner = txn.NewRunner(db.C(tr.transactionCollectionName))
 	}
-	runner.ChangeLog(db.C(tr.changeLogName))
+	if tr.changeLogName != "" {
+		runner.ChangeLog(db.C(tr.changeLogName))
+	}
 	return runner
 }
 
