@@ -25,3 +25,6 @@ require (
 	golang.org/x/text v0.3.5 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
+
+replace github.com/juju/mgo/v2 => github.com/hpidcock/mgo/v2 v2.0.0-20220712063409-dcf0c4875ba8
+

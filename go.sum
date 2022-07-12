@@ -1,4 +1,10 @@
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
+github.com/hpidcock/mgo/v2 v2.0.0-20220712051344-705034dcf3de h1:h37wOUxLTzQ7CnplsEaeBcP6R/f0UuDAmt2jDj0+FBg=
+github.com/hpidcock/mgo/v2 v2.0.0-20220712051344-705034dcf3de/go.mod h1:N614SE0a4e+ih2rg96Vi2PeC3cTpUOWgCTv3Cgk974c=
+github.com/hpidcock/mgo/v2 v2.0.0-20220712061958-48d28efff097 h1:mUlPaEXFTQX1MLYBqozWmxdL9csWtDewGuAbSyvv1Wg=
+github.com/hpidcock/mgo/v2 v2.0.0-20220712061958-48d28efff097/go.mod h1:N614SE0a4e+ih2rg96Vi2PeC3cTpUOWgCTv3Cgk974c=
+github.com/hpidcock/mgo/v2 v2.0.0-20220712063409-dcf0c4875ba8 h1:7XBq/TMjRtuUutQ4qWZLBLFJD2TLEWWHzlACvWHZTcM=
+github.com/hpidcock/mgo/v2 v2.0.0-20220712063409-dcf0c4875ba8/go.mod h1:N614SE0a4e+ih2rg96Vi2PeC3cTpUOWgCTv3Cgk974c=
 github.com/juju/ansiterm v0.0.0-20160907234532-b99631de12cf/go.mod h1:UJSiEoRfvx3hP73CvoARgeLjaIOjybY9vj8PUPPFGeU=
 github.com/juju/ansiterm v0.0.0-20180109212912-720a0952cc2a/go.mod h1:UJSiEoRfvx3hP73CvoARgeLjaIOjybY9vj8PUPPFGeU=
 github.com/juju/clock v0.0.0-20190205081909-9c5c9712527c/go.mod h1:nD0vlnrUjcjJhqN5WuCWZyzfd5AHZAC9/ajvbSx69xA=
