@@ -9,6 +9,7 @@ import (
 
 	"github.com/juju/mgo/v2"
 	"github.com/juju/mgo/v2/bson"
+	mgotesting "github.com/juju/mgo/v2/testing"
 	"github.com/juju/mgo/v2/txn"
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
@@ -17,7 +18,7 @@ import (
 
 type TxnSuite struct {
 	testing.IsolationSuite
-	testing.MgoSuite
+	mgotesting.MgoSuite
 	db     *mgo.Database
 	txns   *mgo.Collection
 	runner *txn.Runner

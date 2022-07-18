@@ -6,10 +6,10 @@ package txn_test
 import (
 	stdtesting "testing"
 
-	"github.com/juju/testing"
+	mgotesting "github.com/juju/mgo/v2/testing"
 )
 
 func Test(t *stdtesting.T) {
 	// Pass nil for Certs because we don't need SSL
-	testing.MgoTestPackage(t, nil)
+	mgotesting.MgoTestPackage(t, nil)
 }
