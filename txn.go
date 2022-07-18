@@ -20,10 +20,10 @@ import (
 
 	"github.com/juju/clock"
 	"github.com/juju/loggo"
-	"github.com/juju/mgo/v2"
-	"github.com/juju/mgo/v2/bson"
-	"github.com/juju/mgo/v2/sstxn"
-	"github.com/juju/mgo/v2/txn"
+	"github.com/juju/mgo/v3"
+	"github.com/juju/mgo/v3/bson"
+	"github.com/juju/mgo/v3/sstxn"
+	"github.com/juju/mgo/v3/txn"
 )
 
 var logger = loggo.GetLogger("juju.txn")
