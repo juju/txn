@@ -8,9 +8,10 @@ import (
 	"time"
 
 	"github.com/juju/errors"
-	"github.com/juju/mgo/v2"
-	"github.com/juju/mgo/v2/bson"
-	"github.com/juju/mgo/v2/txn"
+	"github.com/juju/mgo/v3"
+	"github.com/juju/mgo/v3/bson"
+	mgotesting "github.com/juju/mgo/v3/testing"
+	"github.com/juju/mgo/v3/txn"
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
@@ -278,7 +279,7 @@ func (s *IncrementalPruneSuite) TestPruneLeavesIncompleteStashAlone(c *gc.C) {
 }
 
 type TxnSuite struct {
-	testing.IsolatedMgoSuite
+	mgotesting.IsolatedMgoSuite
 	db     *mgo.Database
 	txns   *mgo.Collection
 	runner *txn.Runner

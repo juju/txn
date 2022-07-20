@@ -9,22 +9,23 @@ import (
 	"time"
 
 	"github.com/juju/clock/testclock"
-	"github.com/juju/mgo/v2"
-	"github.com/juju/mgo/v2/bson"
-	"github.com/juju/mgo/v2/txn"
+	"github.com/juju/mgo/v3"
+	"github.com/juju/mgo/v3/bson"
+	mgotesting "github.com/juju/mgo/v3/testing"
+	"github.com/juju/mgo/v3/txn"
 	"github.com/juju/testing"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
 
-	jujutxn "github.com/juju/txn/v2"
-	txntesting "github.com/juju/txn/v2/testing"
+	jujutxn "github.com/juju/txn/v3"
+	txntesting "github.com/juju/txn/v3/testing"
 )
 
 var _ = gc.Suite(&txnSuite{})
 
 type txnSuite struct {
 	testing.IsolationSuite
-	testing.MgoSuite
+	mgotesting.MgoSuite
 	collection  *mgo.Collection
 	txnRunner   jujutxn.Runner
 	supportsSST bool
@@ -77,23 +78,23 @@ func (s *sstxnSuite) SetUpSuite(c *gc.C) {
 	// Check to see if we can even use server-side transactions,
 	// check first so we don't restart the server just to say it
 	// doesn't support server-side transactions.
-	if testing.MgoServer.Addr() != "" {
+	if mgotesting.MgoServer.Addr() != "" {
 		// The existing server is running, check its version
 		s.CheckSSTXNSupported(c)
 	}
 	// Make sure MgoServer is set up with replicaset enabled
-	s.origReplicaSet = testing.MgoServer.EnableReplicaSet
+	s.origReplicaSet = mgotesting.MgoServer.EnableReplicaSet
 	if !s.origReplicaSet {
-		testing.MgoServer.EnableReplicaSet = true
+		mgotesting.MgoServer.EnableReplicaSet = true
 		c.Logf("restarting Mongo with replicaset enabled")
-		testing.MgoServer.Restart()
+		mgotesting.MgoServer.Restart()
 		s.CheckSSTXNSupported(c)
 	}
 	s.txnSuite.SetUpSuite(c)
 }
 
 func (s *sstxnSuite) CheckSSTXNSupported(c *gc.C) {
-	info := testing.MgoServer.DialInfo()
+	info := mgotesting.MgoServer.DialInfo()
 	session, err := mgo.DialWithInfo(info)
 	c.Assert(err, gc.IsNil)
 	defer session.Close()
@@ -106,9 +107,9 @@ func (s *sstxnSuite) CheckSSTXNSupported(c *gc.C) {
 func (s *sstxnSuite) TearDownSuite(c *gc.C) {
 	s.MgoSuite.TearDownSuite(c)
 	s.IsolationSuite.TearDownSuite(c)
-	if s.origReplicaSet != testing.MgoServer.EnableReplicaSet {
-		testing.MgoServer.EnableReplicaSet = s.origReplicaSet
-		testing.MgoServer.Restart()
+	if s.origReplicaSet != mgotesting.MgoServer.EnableReplicaSet {
+		mgotesting.MgoServer.EnableReplicaSet = s.origReplicaSet
+		mgotesting.MgoServer.Restart()
 	}
 }
 

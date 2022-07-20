@@ -20,10 +20,10 @@ import (
 
 	"github.com/juju/clock"
 	"github.com/juju/loggo"
-	"github.com/juju/mgo/v2"
-	"github.com/juju/mgo/v2/bson"
-	"github.com/juju/mgo/v2/sstxn"
-	"github.com/juju/mgo/v2/txn"
+	"github.com/juju/mgo/v3"
+	"github.com/juju/mgo/v3/bson"
+	"github.com/juju/mgo/v3/sstxn"
+	"github.com/juju/mgo/v3/txn"
 )
 
 var logger = loggo.GetLogger("juju.txn")
@@ -303,6 +303,7 @@ func (tr *transactionRunner) newRunnerImpl() txnRunner {
 
 // Run is defined on Runner.
 func (tr *transactionRunner) Run(transactions TransactionSource) error {
+	var lastErr error
 	for i := 0; i < tr.nrRetries; i++ {
 		// If we are retrying, give other txns a chance to have a go.
 		if i > 0 && tr.serverSideTransactions {
@@ -327,7 +328,7 @@ func (tr *transactionRunner) Run(transactions TransactionSource) error {
 			Attempt: i,
 		}); err == nil {
 			return nil
-		} else if err != txn.ErrAborted {
+		} else if err != txn.ErrAborted && !mgo.IsRetryable(err) && !mgo.IsSnapshotError(err) {
 			// Mongo very occasionally returns an intermittent
 			// "unexpected message" error. Retry those.
 			// Also mongo sometimes gets very busy and we get an
@@ -341,8 +342,12 @@ func (tr *transactionRunner) Run(transactions TransactionSource) error {
 				return err
 			}
 		}
+		lastErr = err
 	}
-	return ErrExcessiveContention
+	if lastErr == txn.ErrAborted {
+		return ErrExcessiveContention
+	}
+	return lastErr
 }
 
 func (tr *transactionRunner) backoff(attempt int) {
