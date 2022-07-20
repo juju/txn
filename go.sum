@@ -41,8 +41,6 @@ github.com/juju/loggo v0.0.0-20200526014432-9ce3a2e09b5e/go.mod h1:vgyd7OREkbtVE
 github.com/juju/loggo v0.0.0-20210728185423-eebad3a902c4/go.mod h1:NIXFioti1SmKAlKNuUwbMenNdef59IF52+ZzuOmHYkg=
 github.com/juju/loggo v1.0.0 h1:Y6ZMQOGR9Aj3BGkiWx7HBbIx6zNwNkxhVNOHU2i1bl0=
 github.com/juju/loggo v1.0.0/go.mod h1:NIXFioti1SmKAlKNuUwbMenNdef59IF52+ZzuOmHYkg=
-github.com/juju/lru v0.0.0-20190314140547-92a0afabdc41 h1:/ucixsNZ+l94agL5LZioJ4ECyOz7kOYY+DKb/0NN6ME=
-github.com/juju/lru v0.0.0-20190314140547-92a0afabdc41/go.mod h1:RI/7Oj7RFK3hzCrjmJVrEeMryn8PEzl6kiIz4QFb48Y=
 github.com/juju/lru v1.0.0 h1:FP8mBNF3jBnKwGO5PtsR+8iIegx8DREfhRhpcGpYcn4=
 github.com/juju/lru v1.0.0/go.mod h1:YauKGp6PAhOQyGuTOkiFdXVP1jR3vLkp/FI71GcpYcQ=
 github.com/juju/mgo/v2 v2.0.0-20210302023703-70d5d206e208/go.mod h1:0OChplkvPTZ174D2FYZXg4IB9hbEwyHkD+zT+/eK+Fg=
@@ -69,7 +67,6 @@ github.com/juju/testing v1.0.0/go.mod h1:rUquetT0ALL48LHZhyRGvjjBH8xZaZ8dFClulKK
 github.com/juju/testing v1.0.1 h1:Zlg3HKP+wBRpkxCmh+Bsxp3WOmfelcZXuX6Adb7Dvec=
 github.com/juju/testing v1.0.1/go.mod h1:h3Vd2rzB57KrdsBEy6R7bmSKPzP76BnNavt7i8PerwQ=
 github.com/juju/utils v0.0.0-20180424094159-2000ea4ff043/go.mod h1:6/KLg8Wz/y2KVGWEpkK9vMNGkOnu4k/cqs8Z1fKjTOk=
-github.com/juju/utils v0.0.0-20200116185830-d40c2fe10647 h1:wQpkHVbIIpz1PCcLYku9KFWsJ7aEMQXHBBmLy3tRBTk=
 github.com/juju/utils v0.0.0-20200116185830-d40c2fe10647/go.mod h1:6/KLg8Wz/y2KVGWEpkK9vMNGkOnu4k/cqs8Z1fKjTOk=
 github.com/juju/utils/v2 v2.0.0-20200923005554-4646bfea2ef1/go.mod h1:fdlDtQlzundleLLz/ggoYinEt/LmnrpNKcNTABQATNI=
 github.com/juju/utils/v3 v3.0.0-20220130232349-cd7ecef0e94a/go.mod h1:LzwbbEN7buYjySp4nqnti6c6olSqRXUk6RkbSUUP1n8=
@@ -79,7 +76,6 @@ github.com/juju/utils/v3 v3.0.0 h1:Gg3n63mGPbBuoXCo+EPJuMi44hGZfloI8nlCIebHu2Q=
 github.com/juju/utils/v3 v3.0.0/go.mod h1:8csUcj1VRkfjNIRzBFWzLFCMLwLqsRWvkmhfVAUwbC4=
 github.com/juju/version v0.0.0-20161031051906-1f41e27e54f2/go.mod h1:kE8gK5X0CImdr7qpSKl3xB2PmpySSmfj7zVbkZFs81U=
 github.com/juju/version v0.0.0-20180108022336-b64dbd566305/go.mod h1:kE8gK5X0CImdr7qpSKl3xB2PmpySSmfj7zVbkZFs81U=
-github.com/juju/version v0.0.0-20191219164919-81c1be00b9a6 h1:nrqc9b4YKpKV4lPI3GPPFbo5FUuxkWxgZE2Z8O4lgaw=
 github.com/juju/version v0.0.0-20191219164919-81c1be00b9a6/go.mod h1:kE8gK5X0CImdr7qpSKl3xB2PmpySSmfj7zVbkZFs81U=
 github.com/juju/version/v2 v2.0.0-20211007103408-2e8da085dc23/go.mod h1:Ljlbryh9sYaUSGXucslAEDf0A2XUSGvDbHJgW8ps6nc=
 github.com/juju/version/v2 v2.0.0 h1:0OjCOlgA2UBbB8fSCgd8fmGsntrSbAWXEJil47bQptY=
@@ -150,9 +146,7 @@ golang.org/x/sys v0.0.0-20201119102817-f84b799fce68/go.mod h1:h1NjWce9XRLGQEsW7w
 golang.org/x/sys v0.0.0-20210423082822-04245dca01da/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.0.0-20210806184541-e5e7981a1069/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
-golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
-golang.org/x/term v0.0.0-20210927222741-03fcf44c2211/go.mod h1:jbD1KX2456YbFQfuXm/mYQcufACuNUgVhRMnK/tPxf8=
 golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
 golang.org/x/text v0.3.3/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
 golang.org/x/text v0.3.5/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
