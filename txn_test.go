@@ -264,6 +264,119 @@ func (s *txnSuite) TestBeforeHooks(c *gc.C) {
 	c.Assert(found, gc.DeepEquals, doc)
 }
 
+func (s *sstxnSuite) TestStartedHooks(c *gc.C) {
+	s.insertDoc(c, "1", "Simple")
+
+	secondSession := s.collection.Database.Session.Copy()
+	defer secondSession.Close()
+	secondRunner := jujutxn.NewRunner(jujutxn.RunnerParams{
+		Database:               secondSession.DB("juju"),
+		ChangeLogName:          "txns.log",
+		ServerSideTransactions: true,
+		PauseFunc: func(dur time.Duration) {
+			s.backoffs = append(s.backoffs, dur)
+		},
+	})
+
+	setDocName := func(id, name string) {
+		ops := []txn.Op{{
+			C:      s.collection.Name,
+			Id:     id,
+			Assert: txn.DocExists,
+			Update: bson.D{{"$set", bson.D{{"name", name}}}},
+		}}
+		err := secondRunner.RunTransaction(&jujutxn.Transaction{
+			Ops:     ops,
+			Attempt: 0,
+		})
+		c.Assert(err, gc.IsNil)
+	}
+
+	hooks := []jujutxn.TestHook{
+		{Started: func() { setDocName("1", "FooBar") }},
+		{Started: func() { setDocName("1", "Foo") }},
+	}
+	defer txntesting.SetTestHooks(c, s.txnRunner, hooks...).Check()
+	maxAttempt := 0
+	buildTxn := func(attempt int) ([]txn.Op, error) {
+		maxAttempt = attempt
+		ops := []txn.Op{{
+			C:      s.collection.Name,
+			Id:     "1",
+			Assert: bson.D{{"name", "Foo"}},
+			Update: bson.D{{"$set", bson.D{{"name", "Bar"}}}},
+		}}
+		return ops, nil
+	}
+	err := s.txnRunner.Run(buildTxn)
+	c.Assert(err, gc.IsNil)
+	var found simpleDoc
+	err = s.collection.FindId("1").One(&found)
+	c.Assert(err, gc.IsNil)
+	c.Assert(maxAttempt, gc.Equals, 1)
+	doc := simpleDoc{"1", "Bar"}
+	c.Assert(found, gc.DeepEquals, doc)
+}
+
+func (s *sstxnSuite) TestAssertedHooks(c *gc.C) {
+	s.insertDoc(c, "1", "Foo")
+
+	secondSession := s.collection.Database.Session.Copy()
+	defer secondSession.Close()
+	secondRunner := jujutxn.NewRunner(jujutxn.RunnerParams{
+		Database:               secondSession.DB("juju"),
+		ChangeLogName:          "txns.log",
+		ServerSideTransactions: true,
+		PauseFunc: func(dur time.Duration) {
+			s.backoffs = append(s.backoffs, dur)
+		},
+	})
+
+	setDocName := func(id, name string) {
+		ops := []txn.Op{{
+			C:      s.collection.Name,
+			Id:     id,
+			Assert: txn.DocExists,
+			Update: bson.D{{"$set", bson.D{{"name", name}}}},
+		}}
+		err := secondRunner.RunTransaction(&jujutxn.Transaction{
+			Ops:     ops,
+			Attempt: 0,
+		})
+		c.Assert(err, gc.IsNil)
+	}
+
+	asserted := false
+	hooks := []jujutxn.TestHook{
+		{Asserted: func() {
+			asserted = true
+			setDocName("1", "FooBar")
+		}},
+		{Started: func() { setDocName("1", "Foo") }},
+	}
+	defer txntesting.SetTestHooks(c, s.txnRunner, hooks...).Check()
+	maxAttempt := 0
+	buildTxn := func(attempt int) ([]txn.Op, error) {
+		maxAttempt = attempt
+		ops := []txn.Op{{
+			C:      s.collection.Name,
+			Id:     "1",
+			Assert: bson.D{{"name", "Foo"}},
+			Update: bson.D{{"$set", bson.D{{"name", "Bar"}}}},
+		}}
+		return ops, nil
+	}
+	err := s.txnRunner.Run(buildTxn)
+	c.Assert(err, gc.IsNil)
+	c.Assert(asserted, jc.IsTrue)
+	var found simpleDoc
+	err = s.collection.FindId("1").One(&found)
+	c.Assert(err, gc.IsNil)
+	c.Assert(maxAttempt, gc.Equals, 1)
+	doc := simpleDoc{"1", "Bar"}
+	c.Assert(found, gc.DeepEquals, doc)
+}
+
 func (s *txnSuite) TestAfterHooks(c *gc.C) {
 	changeFuncs := []func(){
 		func() { s.insertDoc(c, "1", "Foo") },

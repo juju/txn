@@ -395,6 +395,32 @@ func (tr *transactionRunner) RunTransaction(transaction *Transaction) error {
 	}
 	start := tr.clock.Now()
 	runner := tr.newRunner()
+	if len(testHooks) > 0 {
+		if sstxnRunner, ok := runner.(*sstxn.Runner); ok {
+			started := testHooks[0].Started
+			if started != nil {
+				sstxnRunner.SetStartHook(func() {
+					logger.Infof("transaction 'started' hook start")
+					started()
+					logger.Infof("transaction 'started' hook end")
+				})
+			}
+			asserted := testHooks[0].Asserted
+			if asserted != nil {
+				sstxnRunner.SetPostAssertHook(func() {
+					logger.Infof("transaction 'asserted' hook start")
+					asserted()
+					logger.Infof("transaction 'asserted' hook end")
+				})
+			}
+			if started != nil || asserted != nil {
+				defer func() {
+					sstxnRunner.SetStartHook(nil)
+					sstxnRunner.SetPostAssertHook(nil)
+				}()
+			}
+		}
+	}
 	err := runner.Run(transaction.Ops, "", nil)
 	if tr.runTransactionObserver != nil {
 		transaction.Error = err
@@ -421,6 +447,10 @@ func (tr *transactionRunner) MaybePruneTransactions(pruneOpts PruneOptions) erro
 type TestHook struct {
 	Before func()
 	After  func()
+	// Started only works for serverside txns
+	Started func()
+	// Asserted only works for serverside txns
+	Asserted func()
 }
 
 // TestHooks returns the test hooks for a transaction runner.
