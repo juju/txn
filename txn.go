@@ -13,12 +13,12 @@
 package txn
 
 import (
-	stderrors "errors"
 	"math/rand"
 	"strings"
 	"time"
 
 	"github.com/juju/clock"
+	"github.com/juju/errors"
 	"github.com/juju/loggo"
 	"github.com/juju/mgo/v3"
 	"github.com/juju/mgo/v3/bson"
@@ -53,18 +53,18 @@ const (
 	defaultChangeLogName = "txns.log"
 )
 
-var (
+const (
 	// ErrExcessiveContention is used to signal that even after retrying, the transaction operations
 	// could not be successfully applied due to database contention.
-	ErrExcessiveContention = stderrors.New("state changing too quickly; try again soon")
+	ErrExcessiveContention errors.ConstError = "state changing too quickly; try again soon"
 
 	// ErrNoOperations is returned by TransactionSource implementations to signal that
 	// no transaction operations are available to run.
-	ErrNoOperations = stderrors.New("no transaction operations are available")
+	ErrNoOperations errors.ConstError = "no transaction operations are available"
 
 	// ErrTransientFailure is returned by TransactionSource implementations to signal that
 	// the transaction list could not be built but the caller should retry.
-	ErrTransientFailure = stderrors.New("transient failure")
+	ErrTransientFailure errors.ConstError = "transient failure"
 )
 
 // TransactionSource defines a function that can return transaction operations to run.
