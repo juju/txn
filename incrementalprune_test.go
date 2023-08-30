@@ -4,6 +4,7 @@
 package txn
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -302,7 +303,7 @@ func (s *TxnSuite) TearDownTest(c *gc.C) {
 
 func (s *TxnSuite) runTxn(c *gc.C, ops ...txn.Op) bson.ObjectId {
 	txnId := bson.NewObjectId()
-	err := s.runner.Run(ops, txnId, nil)
+	err := s.runner.Run(context.Background(), ops, txnId, nil)
 	c.Assert(err, jc.ErrorIsNil)
 	return txnId
 }
@@ -314,7 +315,7 @@ func (s *TxnSuite) runInterruptedTxn(c *gc.C, breakpoint string, ops ...txn.Op) 
 		KillChance: 1,
 		Breakpoint: breakpoint,
 	})
-	err := s.runner.Run(ops, txnId, nil)
+	err := s.runner.Run(context.Background(), ops, txnId, nil)
 	c.Assert(err, gc.Equals, txn.ErrChaos)
 	txn.SetChaos(txn.Chaos{})
 	return txnId

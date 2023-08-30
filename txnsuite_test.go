@@ -4,6 +4,7 @@
 package txn_test
 
 import (
+	"context"
 	"sync/atomic"
 	"time"
 
@@ -55,7 +56,7 @@ func (s *TxnSuite) TearDownTest(c *gc.C) {
 
 func (s *TxnSuite) runTxn(c *gc.C, ops ...txn.Op) bson.ObjectId {
 	txnId := bson.NewObjectId()
-	err := s.runner.Run(ops, txnId, nil)
+	err := s.runner.Run(context.Background(), ops, txnId, nil)
 	c.Assert(err, jc.ErrorIsNil)
 	return txnId
 }
@@ -81,14 +82,14 @@ func timestampBasedTxnId(timestamp time.Time) bson.ObjectId {
 func (s *TxnSuite) runTxnWithTimestamp(c *gc.C, expectedErr error, timestamp time.Time, ops ...txn.Op) bson.ObjectId {
 	txnId := timestampBasedTxnId(timestamp)
 	c.Logf("generated txn %v from timestamp %v", txnId, timestamp)
-	err := s.runner.Run(ops, txnId, nil)
+	err := s.runner.Run(context.Background(), ops, txnId, nil)
 	c.Assert(err, gc.Equals, expectedErr)
 	return txnId
 }
 
 func (s *TxnSuite) runFailingTxn(c *gc.C, expectedErr error, ops ...txn.Op) bson.ObjectId {
 	txnId := bson.NewObjectId()
-	err := s.runner.Run(ops, txnId, nil)
+	err := s.runner.Run(context.Background(), ops, txnId, nil)
 	c.Assert(err, gc.Equals, expectedErr)
 	return txnId
 }

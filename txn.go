@@ -13,6 +13,7 @@
 package txn
 
 import (
+	"context"
 	"math/rand"
 	"strings"
 	"time"
@@ -29,14 +30,6 @@ import (
 var logger = loggo.GetLogger("juju.txn")
 
 const (
-	// defaultClientTxnRetries is the default number of times a transaction will be retried
-	// when there is an invariant assertion failure (for client side transactions).
-	defaultClientTxnRetries = 3
-
-	// defaultServerTxnRetries is the default number of times a transaction will be retried
-	// when there is an invariant assertion failure (for server side transactions).
-	defaultServerTxnRetries = 50
-
 	// defaultRetryBackoff is the default interval used to pause between
 	// unsuccessful transaction operations.
 	defaultRetryBackoff = 1 * time.Millisecond
@@ -51,6 +44,10 @@ const (
 
 	// defaultChangeLogName is the default mgo transaction runner change log.
 	defaultChangeLogName = "txns.log"
+
+	// defaultTxnTimeoutSeconds is the default time length for a
+	// transaction to finish before it gets cancelled.
+	defaultTxnTimeoutSeconds = 120
 )
 
 const (
@@ -139,7 +136,7 @@ type Runner interface {
 }
 
 type txnRunner interface {
-	Run([]txn.Op, bson.ObjectId, interface{}) error
+	Run(context.Context, []txn.Op, bson.ObjectId, interface{}) error
 	ChangeLog(*mgo.Collection)
 	ResumeAll() error
 }
@@ -160,12 +157,13 @@ type transactionRunner struct {
 	clock                     Clock
 
 	serverSideTransactions bool
-	nrRetries              int
 	retryBackoff           time.Duration
 	retryFuzzPercent       int
 	pauseFunc              func(duration time.Duration)
 
 	newRunner func() txnRunner
+
+	txnTimeout time.Duration
 }
 
 var _ Runner = (*transactionRunner)(nil)
@@ -248,7 +246,6 @@ func NewRunner(params RunnerParams) Runner {
 		runTransactionObserver:    params.RunTransactionObserver,
 		clock:                     params.Clock,
 		serverSideTransactions:    sstxn,
-		nrRetries:                 params.MaxRetryAttempts,
 		retryBackoff:              params.RetryBackoff,
 		retryFuzzPercent:          params.RetryFuzzPercent,
 		pauseFunc:                 params.PauseFunc,
@@ -260,12 +257,6 @@ func NewRunner(params RunnerParams) Runner {
 		txnRunner.changeLogName = ""
 	} else if txnRunner.changeLogName == "" {
 		txnRunner.changeLogName = defaultChangeLogName
-	}
-	if txnRunner.nrRetries == 0 {
-		txnRunner.nrRetries = defaultClientTxnRetries
-		if txnRunner.serverSideTransactions {
-			txnRunner.nrRetries = defaultServerTxnRetries
-		}
 	}
 	if txnRunner.retryBackoff == 0 {
 		txnRunner.retryBackoff = defaultRetryBackoff
@@ -284,6 +275,7 @@ func NewRunner(params RunnerParams) Runner {
 		// they also specify a RunTransactionObserver.
 		txnRunner.clock = clock.WallClock
 	}
+	txnRunner.txnTimeout = defaultTxnTimeoutSeconds * time.Second
 	return txnRunner
 }
 
@@ -301,53 +293,68 @@ func (tr *transactionRunner) newRunnerImpl() txnRunner {
 	return runner
 }
 
-// Run is defined on Runner.
+// Run is defined on Runner. After timeout the transaction gets cancelled and
+// the last returned error by the transaction will be returned.
 func (tr *transactionRunner) Run(transactions TransactionSource) error {
-	var lastErr error
-	for i := 0; i < tr.nrRetries; i++ {
-		// If we are retrying, give other txns a chance to have a go.
-		if i > 0 && tr.serverSideTransactions {
-			tr.backoff(i)
-		}
-		ops, err := transactions(i)
-		if err == ErrTransientFailure {
-			continue
-		}
-		if err == ErrNoOperations {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if len(ops) == 0 {
-			// Treat this the same as ErrNoOperations but don't suppress other errors.
-			return nil
-		}
-		if err = tr.RunTransaction(&Transaction{
-			Ops:     ops,
-			Attempt: i,
-		}); err == nil {
-			return nil
-		} else if err != txn.ErrAborted && !mgo.IsRetryable(err) && !mgo.IsSnapshotError(err) {
-			// Mongo very occasionally returns an intermittent
-			// "unexpected message" error. Retry those.
-			// Also mongo sometimes gets very busy and we get an
-			// i/o timeout. We retry those too.
-			// However if this is the last time, return that error
-			// rather than the excessive contention error.
-			msg := err.Error()
-			retryErr := strings.HasSuffix(msg, "unexpected message") ||
-				strings.HasSuffix(msg, "i/o timeout")
-			if !retryErr || i == (tr.nrRetries-1) {
+	ctx, cancel := context.WithTimeout(context.TODO(), tr.txnTimeout)
+	defer cancel()
+
+	var (
+		lastErr error
+		i       int
+	)
+	for {
+		select {
+		case <-ctx.Done():
+			if lastErr == txn.ErrAborted {
+				return ErrExcessiveContention
+			}
+			return lastErr
+		default:
+			// If we are retrying, give other txns a chance to have a go.
+			if i > 0 && tr.serverSideTransactions {
+				tr.backoff(i)
+			}
+			ops, err := transactions(i)
+			if err == ErrTransientFailure {
+				i++
+				continue
+			}
+			if err == ErrNoOperations {
+				return nil
+			}
+			if err != nil {
 				return err
 			}
+			if len(ops) == 0 {
+				// Treat this the same as ErrNoOperations but don't suppress other errors.
+				return nil
+			}
+			if err = tr.runTransaction(
+				ctx,
+				&Transaction{
+					Ops:     ops,
+					Attempt: i,
+				}); err == nil {
+				return nil
+			} else if err != txn.ErrAborted && !mgo.IsRetryable(err) && !mgo.IsSnapshotError(err) {
+				// Mongo very occasionally returns an intermittent
+				// "unexpected message" error. Retry those.
+				// Also mongo sometimes gets very busy and we get an
+				// i/o timeout. We retry those too.
+				// However if this is the last time, return that error
+				// rather than the excessive contention error.
+				msg := err.Error()
+				retryErr := strings.HasSuffix(msg, "unexpected message") ||
+					strings.HasSuffix(msg, "i/o timeout")
+				if !retryErr {
+					return err
+				}
+			}
+			lastErr = err
+			i++
 		}
-		lastErr = err
 	}
-	if lastErr == txn.ErrAborted {
-		return ErrExcessiveContention
-	}
-	return lastErr
 }
 
 func (tr *transactionRunner) backoff(attempt int) {
@@ -370,6 +377,14 @@ func (tr *transactionRunner) pause(dur time.Duration) {
 
 // RunTransaction is defined on Runner.
 func (tr *transactionRunner) RunTransaction(transaction *Transaction) error {
+	ctx, cancel := context.WithTimeout(context.TODO(), tr.txnTimeout)
+	defer cancel()
+
+	return tr.runTransaction(ctx, transaction)
+}
+
+// RunTransaction is defined on Runner.
+func (tr *transactionRunner) runTransaction(ctx context.Context, transaction *Transaction) error {
 	testHooks := <-tr.testHooks
 	tr.testHooks <- nil
 	if len(testHooks) > 0 {
@@ -421,7 +436,7 @@ func (tr *transactionRunner) RunTransaction(transaction *Transaction) error {
 			}
 		}
 	}
-	err := runner.Run(transaction.Ops, "", nil)
+	err := runner.Run(ctx, transaction.Ops, "", nil)
 	if tr.runTransactionObserver != nil {
 		transaction.Error = err
 		transaction.Duration = tr.clock.Now().Sub(start)

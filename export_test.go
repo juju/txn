@@ -19,6 +19,12 @@ func SetRunnerFunc(r Runner, f func() TxnRunner) {
 	}
 }
 
+// Specify the transaction timeout for some tests.
+func SetTxnTimeout(r Runner, t time.Duration) {
+	inner := r.(*transactionRunner)
+	inner.txnTimeout = t
+}
+
 var CheckMongoSupportsOut = checkMongoSupportsOut
 
 // NewDBOracleNoOut is only used for testing. It forces the DBOracle to not ask

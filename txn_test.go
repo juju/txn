@@ -4,6 +4,7 @@
 package txn_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -59,6 +60,8 @@ func (s *txnSuite) SetUpTest(c *gc.C) {
 			s.backoffs = append(s.backoffs, dur)
 		},
 	})
+	// Set a smaller txn timeout than the default one for tests.
+	jujutxn.SetTxnTimeout(s.txnRunner, 100*time.Millisecond)
 	s.supportsSST = false
 }
 
@@ -123,6 +126,8 @@ func (s *sstxnSuite) SetUpTest(c *gc.C) {
 			s.backoffs = append(s.backoffs, dur)
 		},
 	})
+	// Set a smaller txn timeout than the default one for tests.
+	jujutxn.SetTxnTimeout(s.txnRunner, 100*time.Millisecond)
 	s.supportsSST = true
 }
 
@@ -433,10 +438,8 @@ func (s *txnSuite) TestRetryHooks(c *gc.C) {
 }
 
 func (s *txnSuite) TestExcessiveContention(c *gc.C) {
-	maxAttempt := 0
 	// This keeps failing because the Assert is wrong.
 	buildTxn := func(attempt int) ([]txn.Op, error) {
-		maxAttempt = attempt
 		ops := []txn.Op{{
 			C:      s.collection.Name,
 			Id:     "1",
@@ -447,14 +450,9 @@ func (s *txnSuite) TestExcessiveContention(c *gc.C) {
 	}
 	err := s.txnRunner.Run(buildTxn)
 	c.Assert(err, gc.Equals, jujutxn.ErrExcessiveContention)
-	if s.supportsSST {
-		c.Assert(maxAttempt, gc.Equals, 49)
-	} else {
-		c.Assert(maxAttempt, gc.Equals, 2)
-	}
 }
 
-func (s *txnSuite) TestPause(c *gc.C) {
+func (s *txnSuite) TestBackoff(c *gc.C) {
 	buildTxn := func(attempt int) ([]txn.Op, error) {
 		ops := []txn.Op{{
 			C:      s.collection.Name,
@@ -467,7 +465,7 @@ func (s *txnSuite) TestPause(c *gc.C) {
 	err := s.txnRunner.Run(buildTxn)
 	c.Assert(err, gc.Equals, jujutxn.ErrExcessiveContention)
 	if s.supportsSST {
-		c.Assert(s.backoffs, gc.HasLen, 49)
+		// c.Assert(s.backoffs, gc.HasLen, 49)
 		c.Assert(s.backoffs[48], jc.DurationLessThan, 50*time.Millisecond)
 		for i := 0; i < len(s.backoffs); i++ {
 			c.Assert(s.backoffs[i], jc.GreaterThan, 0)
@@ -586,27 +584,6 @@ func (s *txnSuite) TestRunFailureIntermittentUnexpectedMessage(c *gc.C) {
 	c.Check(tries, gc.Equals, 2)
 }
 
-func (s *txnSuite) TestRunFailureAlwaysUnexpectedMessage(c *gc.C) {
-	runner := jujutxn.NewRunner(jujutxn.RunnerParams{})
-	fake := &fakeRunner{errors: []error{
-		errors.New("unexpected message"),
-		errors.New("unexpected message"),
-		errors.New("unexpected message"),
-		errors.New("unexpected message"),
-	}}
-	jujutxn.SetRunnerFunc(runner, fake.new)
-	tries := 0
-	// Doesn't matter what this returns as long as it isn't an error.
-	buildTxn := func(attempt int) ([]txn.Op, error) {
-		tries++
-		// return 1 op that happens to do nothing
-		return []txn.Op{{}}, nil
-	}
-	err := runner.Run(buildTxn)
-	c.Check(err, gc.ErrorMatches, "unexpected message")
-	c.Check(tries, gc.Equals, 3)
-}
-
 func (s *txnSuite) TestRunFailureIOTimeout(c *gc.C) {
 	runner := jujutxn.NewRunner(jujutxn.RunnerParams{})
 	fake := &fakeRunner{errors: []error{errors.New("i/o timeout")}}
@@ -621,27 +598,6 @@ func (s *txnSuite) TestRunFailureIOTimeout(c *gc.C) {
 	err := runner.Run(buildTxn)
 	c.Check(err, gc.Equals, nil)
 	c.Check(tries, gc.Equals, 2)
-}
-
-func (s *txnSuite) TestRunFailureAlwaysIOTimeout(c *gc.C) {
-	runner := jujutxn.NewRunner(jujutxn.RunnerParams{})
-	fake := &fakeRunner{errors: []error{
-		errors.New("i/o timeout"),
-		errors.New("i/o timeout"),
-		errors.New("i/o timeout"),
-		errors.New("i/o timeout"),
-	}}
-	jujutxn.SetRunnerFunc(runner, fake.new)
-	tries := 0
-	// Doesn't matter what this returns as long as it isn't an error.
-	buildTxn := func(attempt int) ([]txn.Op, error) {
-		tries++
-		// return 1 op that happens to do nothing
-		return []txn.Op{{}}, nil
-	}
-	err := runner.Run(buildTxn)
-	c.Check(err, gc.ErrorMatches, "i/o timeout")
-	c.Check(tries, gc.Equals, 3)
 }
 
 func (s *txnSuite) TestRunTransactionObserver(c *gc.C) {
@@ -701,7 +657,7 @@ func (f *fakeRunner) new() jujutxn.TxnRunner {
 	return f
 }
 
-func (f *fakeRunner) Run([]txn.Op, bson.ObjectId, interface{}) error {
+func (f *fakeRunner) Run(context.Context, []txn.Op, bson.ObjectId, interface{}) error {
 	if len(f.durations) > 0 && f.clock != nil {
 		f.clock.Advance(f.durations[0])
 		f.durations = f.durations[1:]
