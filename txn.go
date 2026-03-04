@@ -233,12 +233,15 @@ type RunnerParams struct {
 // NewRunner returns a Runner which runs transactions for the database specified in params.
 // Collection names used to manage the transactions and change log may also be specified in
 // params, but if not, default values will be used.
-func NewRunner(params RunnerParams) Runner {
+func NewRunner(params RunnerParams) (Runner, error) {
 	sstxn := params.ServerSideTransactions
 	if sstxn {
-		sstxn = SupportsServerSideTransactions(params.Database)
-		if !sstxn {
-			logger.Warningf("server-side transactions requested, but database does not support them")
+		supported, err := SupportsServerSideTransactions(params.Database)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if !supported {
+			return nil, errors.New("server-side transactions requested, but mongod does not support them")
 		}
 	}
 	txnRunner := &transactionRunner{
@@ -284,7 +287,7 @@ func NewRunner(params RunnerParams) Runner {
 		// they also specify a RunTransactionObserver.
 		txnRunner.clock = clock.WallClock
 	}
-	return txnRunner
+	return txnRunner, nil
 }
 
 func (tr *transactionRunner) newRunnerImpl() txnRunner {
@@ -461,13 +464,13 @@ func TestHooks(runner Runner) chan ([]TestHook) {
 
 // SupportsServerSideTransactions lets you know if the given database can support
 // server-side transactions.
-func SupportsServerSideTransactions(db *mgo.Database) bool {
+func SupportsServerSideTransactions(db *mgo.Database) (bool, error) {
 	info, err := db.Session.BuildInfo()
 	if err != nil {
-		return false
+		return false, errors.Annotate(err, "checking mongo version for sstxn support")
 	}
 	if len(info.VersionArray) < 1 || info.VersionArray[0] < 4 {
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
