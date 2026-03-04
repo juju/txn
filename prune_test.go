@@ -28,13 +28,14 @@ func (s *PruneSuite) maybePrune(c *gc.C, pruneFactor float32) {
 }
 
 func (s *PruneSuite) maybePruneWithTimestamp(c *gc.C, pruneFactor float32, timestamp time.Time) {
-	r := jujutxn.NewRunner(jujutxn.RunnerParams{
+	r, err := jujutxn.NewRunner(jujutxn.RunnerParams{
 		Database:                  s.db,
 		TransactionCollectionName: s.txns.Name,
 		ChangeLogName:             s.txns.Name + ".log",
 		Clock:                     testclock.NewClock(time.Now()),
 	})
-	err := r.MaybePruneTransactions(jujutxn.PruneOptions{
+	c.Assert(err, jc.ErrorIsNil)
+	err = r.MaybePruneTransactions(jujutxn.PruneOptions{
 		PruneFactor:                pruneFactor,
 		MinNewTransactions:         1,
 		MaxNewTransactions:         1000,

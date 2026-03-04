@@ -51,7 +51,8 @@ func (s *txnSuite) SetUpTest(c *gc.C) {
 	txnsLog := db.C("txns.log")
 	txnsLog.Create(&mgo.CollectionInfo{})
 	s.backoffs = nil
-	s.txnRunner = jujutxn.NewRunner(jujutxn.RunnerParams{
+	var err error
+	s.txnRunner, err = jujutxn.NewRunner(jujutxn.RunnerParams{
 		Database:               db,
 		ChangeLogName:          "txns.log",
 		ServerSideTransactions: false,
@@ -59,6 +60,7 @@ func (s *txnSuite) SetUpTest(c *gc.C) {
 			s.backoffs = append(s.backoffs, dur)
 		},
 	})
+	c.Assert(err, jc.ErrorIsNil)
 	s.supportsSST = false
 }
 
@@ -99,7 +101,9 @@ func (s *sstxnSuite) CheckSSTXNSupported(c *gc.C) {
 	c.Assert(err, gc.IsNil)
 	defer session.Close()
 	db := session.DB(info.Database)
-	if !jujutxn.SupportsServerSideTransactions(db) {
+	supported, err := jujutxn.SupportsServerSideTransactions(db)
+	c.Assert(err, gc.IsNil)
+	if !supported {
 		c.Skip(fmt.Sprintf("mongo version doesn't support server-side-transactions"))
 	}
 }
@@ -115,7 +119,8 @@ func (s *sstxnSuite) TearDownSuite(c *gc.C) {
 
 func (s *sstxnSuite) SetUpTest(c *gc.C) {
 	s.txnSuite.SetUpTest(c)
-	s.txnRunner = jujutxn.NewRunner(jujutxn.RunnerParams{
+	var err error
+	s.txnRunner, err = jujutxn.NewRunner(jujutxn.RunnerParams{
 		Database:               s.collection.Database,
 		ChangeLogName:          "txns.log",
 		ServerSideTransactions: true,
@@ -123,11 +128,13 @@ func (s *sstxnSuite) SetUpTest(c *gc.C) {
 			s.backoffs = append(s.backoffs, dur)
 		},
 	})
+	c.Assert(err, jc.ErrorIsNil)
 	s.supportsSST = true
 }
 
 func (s *sstxnSuite) TestNoChangeLog(c *gc.C) {
-	s.txnRunner = jujutxn.NewRunner(jujutxn.RunnerParams{
+	var err error
+	s.txnRunner, err = jujutxn.NewRunner(jujutxn.RunnerParams{
 		Database:               s.collection.Database,
 		ChangeLogName:          "-",
 		ServerSideTransactions: true,
@@ -135,6 +142,7 @@ func (s *sstxnSuite) TestNoChangeLog(c *gc.C) {
 			s.backoffs = append(s.backoffs, dur)
 		},
 	})
+	c.Assert(err, jc.ErrorIsNil)
 
 	before, err := s.collection.Database.C("txns.log").Count()
 	c.Assert(err, gc.IsNil)
@@ -269,7 +277,7 @@ func (s *sstxnSuite) TestStartedHooks(c *gc.C) {
 
 	secondSession := s.collection.Database.Session.Copy()
 	defer secondSession.Close()
-	secondRunner := jujutxn.NewRunner(jujutxn.RunnerParams{
+	secondRunner, err := jujutxn.NewRunner(jujutxn.RunnerParams{
 		Database:               secondSession.DB("juju"),
 		ChangeLogName:          "txns.log",
 		ServerSideTransactions: true,
@@ -277,6 +285,7 @@ func (s *sstxnSuite) TestStartedHooks(c *gc.C) {
 			s.backoffs = append(s.backoffs, dur)
 		},
 	})
+	c.Assert(err, jc.ErrorIsNil)
 
 	setDocName := func(id, name string) {
 		ops := []txn.Op{{
@@ -308,7 +317,7 @@ func (s *sstxnSuite) TestStartedHooks(c *gc.C) {
 		}}
 		return ops, nil
 	}
-	err := s.txnRunner.Run(buildTxn)
+	err = s.txnRunner.Run(buildTxn)
 	c.Assert(err, gc.IsNil)
 	var found simpleDoc
 	err = s.collection.FindId("1").One(&found)
@@ -323,7 +332,7 @@ func (s *sstxnSuite) TestAssertedHooks(c *gc.C) {
 
 	secondSession := s.collection.Database.Session.Copy()
 	defer secondSession.Close()
-	secondRunner := jujutxn.NewRunner(jujutxn.RunnerParams{
+	secondRunner, err := jujutxn.NewRunner(jujutxn.RunnerParams{
 		Database:               secondSession.DB("juju"),
 		ChangeLogName:          "txns.log",
 		ServerSideTransactions: true,
@@ -331,6 +340,7 @@ func (s *sstxnSuite) TestAssertedHooks(c *gc.C) {
 			s.backoffs = append(s.backoffs, dur)
 		},
 	})
+	c.Assert(err, jc.ErrorIsNil)
 
 	setDocName := func(id, name string) {
 		ops := []txn.Op{{
@@ -366,7 +376,7 @@ func (s *sstxnSuite) TestAssertedHooks(c *gc.C) {
 		}}
 		return ops, nil
 	}
-	err := s.txnRunner.Run(buildTxn)
+	err = s.txnRunner.Run(buildTxn)
 	c.Assert(err, gc.IsNil)
 	c.Assert(asserted, jc.IsTrue)
 	var found simpleDoc
@@ -571,7 +581,8 @@ func (s *txnSuite) TestTransientFailure(c *gc.C) {
 }
 
 func (s *txnSuite) TestRunFailureIntermittentUnexpectedMessage(c *gc.C) {
-	runner := jujutxn.NewRunner(jujutxn.RunnerParams{})
+	runner, err := jujutxn.NewRunner(jujutxn.RunnerParams{})
+	c.Assert(err, jc.ErrorIsNil)
 	fake := &fakeRunner{errors: []error{errors.New("unexpected message")}}
 	jujutxn.SetRunnerFunc(runner, fake.new)
 	tries := 0
@@ -581,13 +592,14 @@ func (s *txnSuite) TestRunFailureIntermittentUnexpectedMessage(c *gc.C) {
 		// return 1 op that happens to do nothing
 		return []txn.Op{{}}, nil
 	}
-	err := runner.Run(buildTxn)
+	err = runner.Run(buildTxn)
 	c.Check(err, gc.Equals, nil)
 	c.Check(tries, gc.Equals, 2)
 }
 
 func (s *txnSuite) TestRunFailureAlwaysUnexpectedMessage(c *gc.C) {
-	runner := jujutxn.NewRunner(jujutxn.RunnerParams{})
+	runner, err := jujutxn.NewRunner(jujutxn.RunnerParams{})
+	c.Assert(err, jc.ErrorIsNil)
 	fake := &fakeRunner{errors: []error{
 		errors.New("unexpected message"),
 		errors.New("unexpected message"),
@@ -602,13 +614,14 @@ func (s *txnSuite) TestRunFailureAlwaysUnexpectedMessage(c *gc.C) {
 		// return 1 op that happens to do nothing
 		return []txn.Op{{}}, nil
 	}
-	err := runner.Run(buildTxn)
+	err = runner.Run(buildTxn)
 	c.Check(err, gc.ErrorMatches, "unexpected message")
 	c.Check(tries, gc.Equals, 3)
 }
 
 func (s *txnSuite) TestRunFailureIOTimeout(c *gc.C) {
-	runner := jujutxn.NewRunner(jujutxn.RunnerParams{})
+	runner, err := jujutxn.NewRunner(jujutxn.RunnerParams{})
+	c.Assert(err, jc.ErrorIsNil)
 	fake := &fakeRunner{errors: []error{errors.New("i/o timeout")}}
 	jujutxn.SetRunnerFunc(runner, fake.new)
 	tries := 0
@@ -618,13 +631,14 @@ func (s *txnSuite) TestRunFailureIOTimeout(c *gc.C) {
 		// return 1 op that happens to do nothing
 		return []txn.Op{{}}, nil
 	}
-	err := runner.Run(buildTxn)
+	err = runner.Run(buildTxn)
 	c.Check(err, gc.Equals, nil)
 	c.Check(tries, gc.Equals, 2)
 }
 
 func (s *txnSuite) TestRunFailureAlwaysIOTimeout(c *gc.C) {
-	runner := jujutxn.NewRunner(jujutxn.RunnerParams{})
+	runner, err := jujutxn.NewRunner(jujutxn.RunnerParams{})
+	c.Assert(err, jc.ErrorIsNil)
 	fake := &fakeRunner{errors: []error{
 		errors.New("i/o timeout"),
 		errors.New("i/o timeout"),
@@ -639,7 +653,7 @@ func (s *txnSuite) TestRunFailureAlwaysIOTimeout(c *gc.C) {
 		// return 1 op that happens to do nothing
 		return []txn.Op{{}}, nil
 	}
-	err := runner.Run(buildTxn)
+	err = runner.Run(buildTxn)
 	c.Check(err, gc.ErrorMatches, "i/o timeout")
 	c.Check(tries, gc.Equals, 3)
 }
@@ -647,12 +661,13 @@ func (s *txnSuite) TestRunFailureAlwaysIOTimeout(c *gc.C) {
 func (s *txnSuite) TestRunTransactionObserver(c *gc.C) {
 	var calls []jujutxn.Transaction
 	clock := testclock.NewClock(time.Now())
-	runner := jujutxn.NewRunner(jujutxn.RunnerParams{
+	runner, err := jujutxn.NewRunner(jujutxn.RunnerParams{
 		RunTransactionObserver: func(txn jujutxn.Transaction) {
 			calls = append(calls, txn)
 		},
 		Clock: clock,
 	})
+	c.Assert(err, jc.ErrorIsNil)
 	fake := &fakeRunner{
 		errors: []error{
 			txn.ErrAborted,
@@ -674,7 +689,7 @@ func (s *txnSuite) TestRunTransactionObserver(c *gc.C) {
 	buildTxn := func(attempt int) ([]txn.Op, error) {
 		return ops, nil
 	}
-	err := runner.Run(buildTxn)
+	err = runner.Run(buildTxn)
 	c.Check(err, gc.IsNil)
 	c.Check(calls, gc.HasLen, 2)
 	c.Check(calls[0].Ops, gc.DeepEquals, ops)
