@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/juju/clock/testclock"
-	"github.com/juju/loggo"
+	"github.com/juju/loggo/v2"
 	"github.com/juju/mgo/v3/bson"
 	"github.com/juju/mgo/v3/txn"
 	jc "github.com/juju/testing/checkers"
@@ -28,14 +28,13 @@ func (s *PruneSuite) maybePrune(c *gc.C, pruneFactor float32) {
 }
 
 func (s *PruneSuite) maybePruneWithTimestamp(c *gc.C, pruneFactor float32, timestamp time.Time) {
-	r, err := jujutxn.NewRunner(jujutxn.RunnerParams{
+	r := jujutxn.NewRunner(jujutxn.RunnerParams{
 		Database:                  s.db,
 		TransactionCollectionName: s.txns.Name,
 		ChangeLogName:             s.txns.Name + ".log",
 		Clock:                     testclock.NewClock(time.Now()),
 	})
-	c.Assert(err, jc.ErrorIsNil)
-	err = r.MaybePruneTransactions(jujutxn.PruneOptions{
+	err := r.MaybePruneTransactions(jujutxn.PruneOptions{
 		PruneFactor:                pruneFactor,
 		MinNewTransactions:         1,
 		MaxNewTransactions:         1000,
