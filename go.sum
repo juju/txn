@@ -42,8 +42,6 @@ github.com/juju/loggo v0.0.0-20200526014432-9ce3a2e09b5e/go.mod h1:vgyd7OREkbtVE
 github.com/juju/loggo v0.0.0-20210728185423-eebad3a902c4/go.mod h1:NIXFioti1SmKAlKNuUwbMenNdef59IF52+ZzuOmHYkg=
 github.com/juju/loggo v1.0.0 h1:Y6ZMQOGR9Aj3BGkiWx7HBbIx6zNwNkxhVNOHU2i1bl0=
 github.com/juju/loggo v1.0.0/go.mod h1:NIXFioti1SmKAlKNuUwbMenNdef59IF52+ZzuOmHYkg=
-github.com/juju/loggo/v2 v2.2.0 h1:sXcqSo1Kt14HAJSgohBhd975yd89F0a+Ei7PTKLRsdo=
-github.com/juju/loggo/v2 v2.2.0/go.mod h1:647d6WvXBLj5lvka2qBvccr7vMIvF2KFkEH+0ZuFOUM=
 github.com/juju/lru v1.0.0 h1:FP8mBNF3jBnKwGO5PtsR+8iIegx8DREfhRhpcGpYcn4=
 github.com/juju/lru v1.0.0/go.mod h1:YauKGp6PAhOQyGuTOkiFdXVP1jR3vLkp/FI71GcpYcQ=
 github.com/juju/mgo/v2 v2.0.0-20210302023703-70d5d206e208/go.mod h1:0OChplkvPTZ174D2FYZXg4IB9hbEwyHkD+zT+/eK+Fg=
@@ -67,8 +65,8 @@ github.com/juju/testing v0.0.0-20210324180055-18c50b0c2098/go.mod h1:7lxZW0B50+x
 github.com/juju/testing v0.0.0-20220202055744-1ad0816210a6/go.mod h1:QgWc2UdIPJ8t3rnvv95tFNOsQDfpXYEZDbP281o3b2c=
 github.com/juju/testing v0.0.0-20220203020004-a0ff61f03494/go.mod h1:rUquetT0ALL48LHZhyRGvjjBH8xZaZ8dFClulKK5wK4=
 github.com/juju/testing v1.0.0/go.mod h1:rUquetT0ALL48LHZhyRGvjjBH8xZaZ8dFClulKK5wK4=
-github.com/juju/testing v1.2.0 h1:Q0wxjaxx4XPVEN+SgzxKr3d82pjmSBcuM3WndAU391c=
-github.com/juju/testing v1.2.0/go.mod h1:lqZVzNwBKAbylGZidK77ts6kIdoOkmD52+4m0ysetPo=
+github.com/juju/testing v1.1.0 h1:+WWez0vCu6dtnpLIzfuuo3bN3x62LBIyMDCfvMYP+Qg=
+github.com/juju/testing v1.1.0/go.mod h1:1XQGptw6JWFvRWb3ewilUdTBG0oGcoI2kdX9Z1VEzhU=
 github.com/juju/utils v0.0.0-20180424094159-2000ea4ff043/go.mod h1:6/KLg8Wz/y2KVGWEpkK9vMNGkOnu4k/cqs8Z1fKjTOk=
 github.com/juju/utils v0.0.0-20200116185830-d40c2fe10647/go.mod h1:6/KLg8Wz/y2KVGWEpkK9vMNGkOnu4k/cqs8Z1fKjTOk=
 github.com/juju/utils/v2 v2.0.0-20200923005554-4646bfea2ef1/go.mod h1:fdlDtQlzundleLLz/ggoYinEt/LmnrpNKcNTABQATNI=
